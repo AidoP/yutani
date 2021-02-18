@@ -50,7 +50,6 @@ impl Message {
         let info = (message_size << 16) as u32 | self.opcode as u32;
         writer.write_all(&info.to_ne_bytes())?;
         let args: &[u8] = unsafe { std::slice::from_raw_parts(self.args.as_ptr() as *const u8, args_size) };
-        println!("Sending args: {:?}", args);
         writer.write_all(args)?;
         Ok(())
     }
@@ -75,7 +74,6 @@ impl Message {
     /// Push a string to the list of arguments, appending a null-terminator
     /// Use `push_bytes()` if you are pushing a string that is already null-terminated
     pub fn push_str<Bytes: AsRef<[u8]>>(&mut self, str: Bytes) {
-        println!("Adding string: {:?}, length: {}", std::str::from_utf8(str.as_ref()), str.as_ref().len() as u32 + 1 | 0b11);
         let chunks = str.as_ref().chunks_exact(std::mem::size_of::<u32>());
         let r = chunks.remainder();
         // As we add a character and div rounds down, we always add an extra u32 to the length 
@@ -139,12 +137,13 @@ impl<'a> Args<'a> {
         if len & 0b11 != 0 {
             len = (len & !0b11) + 4;
         }
-        if self.args.len() * std::mem::size_of::<u32>() < len {
+        if len > self.args.len() * std::mem::size_of::<u32>() {
             None
         } else {
             // Transmute to a &[u8], careful to update the length to be in the correct units and to keep the same lifetime
             let str: &'a [u8] = unsafe { std::slice::from_raw_parts(self.args.as_ptr() as *const u8, self.args.len() * std::mem::size_of::<u32>() / std::mem::size_of::<u8>()) };
-            self.args = &self.args[len..];
+            self.args = &self.args[len / std::mem::size_of::<u32>()..];
+            // TODO: Should we trust the length? Are nulls in a &str potentially hazardous?
             let null_index = str[..len].iter().take_while(|&&b| b != 0).count(); // Too lenient
             Some(&str[..null_index])
         }
@@ -165,7 +164,7 @@ impl<'a> Args<'a> {
         } else {
             // Transmute to a &[u8], careful to update the length to be in the correct units and to keep the same lifetime
             let array: &'a [u8] = unsafe { std::slice::from_raw_parts(self.args.as_ptr() as *const u8, len) };
-            self.args = &self.args[aligned_len..];
+            self.args = &self.args[aligned_len / std::mem::size_of::<u32>()..];
             Some(array)
         }
 

@@ -60,6 +60,7 @@ impl<P: Protocol> DerefMut for Server<P> {
 }
 
 /// A client that is connected to the server
+///
 /// Clients own their resources but may lease them out during dispatch
 pub struct Client<P: Protocol> {
     stream: UnixStream,
@@ -74,7 +75,7 @@ impl<P: Protocol> Client<P> {
         if let Some(lease) = Protocol::request(lease, self, message)? {
             self.release(lease);
         } else {
-            self.forget(id);
+            self.objects.remove(&id);
         }
         Ok(())
     }
@@ -113,6 +114,7 @@ impl<P: Protocol> Client<P> {
             .ok_or(DispatchError::ObjectTaken(id))
     }
     /// Lease out an object from the client
+    ///
     /// A leased object unusable by the dispatch system
     pub fn lease(&mut self, id: u32) -> Result<GenericLease<P>> {
         let object = self.objects
@@ -131,11 +133,11 @@ impl<P: Protocol> Client<P> {
         *self.objects.get_mut(&id).unwrap() = Some(object);
     }
     /// Forget an object exists, returning the owned resources, leased or otherwise
-    fn forget(&mut self, id: u32) -> Option<P> {
-        self.objects.remove(&id).flatten()
+    pub fn forget<O: Object>(&mut self, object: O) -> Option<P> {
+        self.objects.remove(&object.id()).flatten()
     }
     /// Reserves a place for an object, converting it to a lease
-    pub fn reserve<T>(&mut self, NewId(id, ..): NewId, object: T) -> Result<Lease<T>> {
+    pub fn reserve<T>(&mut self, NewId { id, ..}: NewId, object: T) -> Result<Lease<T>> {
         if let Some(_) = self.objects.insert(id, None) {
             Err(DispatchError::ObjectExists(id))
         } else {
@@ -146,8 +148,9 @@ impl<P: Protocol> Client<P> {
         }
     }
     /// Insert an object
+    ///
     /// Takes ownership of the object. To keep ownership in the form of a lease, use `reserve`
-    pub fn insert(&mut self, NewId(id, ..): NewId, object: P) -> Result<GenericLease<P>> {
+    pub fn insert(&mut self, NewId { id, ..}: NewId, object: P) -> Result<GenericLease<P>> {
         if let Some(_) = self.objects.insert(id, None) {
             Err(DispatchError::ObjectExists(id))
         } else {
@@ -157,8 +160,20 @@ impl<P: Protocol> Client<P> {
             })
         }
     }
+    /// Converts a NewId to a lease without storing the lease.
+    ///
+    /// Useful if, and only if, the object is a temporary that is discarded without ever passing it to the client
+    /// # Safety
+    /// Attempting to release an upgraded lease will result in undefined behaviour
+    // Note: Though semantically unsafe, it is safe Rust. unsafe abuse?
+    pub unsafe fn upgrade<T>(&mut self, NewId { id, ..}: NewId, object: T) -> Lease<T> {
+        Lease {
+            object,
+            id
+        }
+    }
 }
-/// A contract relinquishment of an object by the client with the promise of return
+/// A contract relinquishment of an object by the client with the promise of its return
 pub struct GenericLease<P: Protocol> {
     object: P,
     pub id: u32
@@ -197,8 +212,9 @@ impl<P: Protocol, T: Into<P>> From<Lease<T>> for GenericLease<P> {
         }
     }
 }
-/// A lease with the concrete type extracted
-/// Leases are created in glue code where the concrete types of a generic lease are known
+/// A lease with the concrete type extracted.
+///
+/// Leases are created in glue code where the concrete types of a generic lease are known.
 pub struct Lease<T> {
     object: T,
     pub id: u32
@@ -232,14 +248,17 @@ impl<T> Object for Lease<T> {
         self.id
     }
 }
+impl<P: Protocol> Object for GenericLease<P> {
+    fn id(&self) -> u32 {
+        self.id
+    }
+}
 
-/// A protocol defines a set of interfaces in use by the Wayland IPC system
+/// A protocol defines a set of interfaces in use by the Wayland IPC system.
 /// In terms of this crate, the protocol trait allows the dispatch system to store a generic, and unknown to the `wl` crate,
 /// set of interfaces that the glue macros can use to store static type information for otherwise generic objects.
 ///
-/// Use the `#[wl::protocol]` attribute macro to create the enum representing concrete interface types
-///
-/// Awaiting stabilisation of arbitrary self types for 
+/// Use the `#[wl::server::protocol]` attribute macro to create the enum representing concrete interface types
 pub trait Protocol: Default + Sized {
     /// Call a function on this object for a given message
     fn request(lease: GenericLease<Self>, client: &mut Client<Self>, message: Message) -> Result<Option<GenericLease<Self>>>;
