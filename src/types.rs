@@ -38,14 +38,17 @@ impl Into<i32> for Fixed {
 /// Generally the interface of the new object is known ahead of time
 /// thanks to the agreed upon protocol, however in some instances a NewId may be generic
 /// In such cases the name of the interface to instrantiate an object for is passed along side
+#[derive(Debug)]
 pub struct NewId<'a> {
     pub id: u32,
+    pub version: u32,
     pub interface: &'a str
 }
 impl<'a> NewId<'a> {
-    pub fn new(id: u32, interface: &'a str) -> Self {
+    pub fn new(id: u32, version: u32, interface: &'a str) -> Self {
         Self {
-            id, 
+            id,
+            version,
             interface
         }
     }

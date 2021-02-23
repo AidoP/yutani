@@ -1,6 +1,7 @@
 use std::{
     collections::HashMap,
     fs,
+    fmt,
     io,
     marker::PhantomData,
     os::unix::{net::{UnixListener, UnixStream}},
@@ -210,6 +211,11 @@ impl<P: Protocol, T: Into<P>> From<Lease<T>> for GenericLease<P> {
             object: object.into(),
             id
         }
+    }
+}
+impl<P: Protocol> fmt::Debug for GenericLease<P> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.id)
     }
 }
 /// A lease with the concrete type extracted.

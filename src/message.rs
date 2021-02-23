@@ -1,5 +1,5 @@
 use std::io::{self, Read, Write};
-use crate::types::*;
+use crate::{DispatchError, types::*};
 
 /// A message over the wire
 /// Each message refers to an action to carry out on an Object with given arguments defined by the interface that the object implements
@@ -170,12 +170,14 @@ impl<'a> Args<'a> {
 
     }
     /// Interpret the next argument as a new_id of which we do not know the type of
-    pub fn next_generic_object(&mut self) -> Option<(u32, &'a [u8], u32)> {
-        Some((
-            self.next_u32()?,
-            self.next_str()?,
-            self.next_u32()?,
-        ))
+    pub fn next_new_id(&mut self) -> Result<NewId, DispatchError> {
+        let interface = std::str::from_utf8(self.next_str().ok_or(DispatchError::ExpectedArgument("new_id interface"))?)
+            .map_err(|e| DispatchError::Utf8Error(e, "Interface name for a generic new_id"))?;
+        Ok(NewId {
+            interface,
+            version: self.next_u32().ok_or(DispatchError::ExpectedArgument("new_id version"))?,
+            id: self.next_u32().ok_or(DispatchError::ExpectedArgument("new_id id"))?
+        })
     }
     /// Collect a file descriptor from the ancillary data
     pub fn next_fd(&mut self) -> ! {

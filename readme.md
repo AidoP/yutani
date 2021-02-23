@@ -1,8 +1,11 @@
 # Wl
-`wl` is a Wayland client and server library for Rust.
+`wl` is a generic IPC and Wayland client and server library for Rust.
 
 This is **not** a Rust binding for libwayland, rather, this crate is a standalone implementation of the Wayland Protocol.
 `wl` consists of primitives for communication using the Wayland wire protocol and a [macro](https://github.com/AidoP/wl-macro) for generating glue code from Wayland protocol descriptions in the TOML format.
+
+# Generic IPC
+`wl` makes no assumptions about the implemented interfaces - the only requirement is a single default display object. This makes `wl` a fully fledged IPC library outside of the high-level Wayland protocol. Once client support is close to completion expect to see an example IPC system for media controls.
 
 # Why TOML
 
@@ -20,3 +23,9 @@ Wayland Protocols converted to TOML are available under [wl-protocols](https://g
 # Example Usage
 
 A minimal example implementing the assumed `wl_display` bootstrapping interface is available at [`examples/basic/`](https://github.com/AidoP/wl/tree/main/examples/basic).
+
+# Goals
+- Protocol compliance: compatabilty with libwayland clients and servers
+- Both client and server functionality under the one crate
+- Full use of Rust's type system to reduce the possibility of logic errors
+- Unassuming of any interfaces to allow for non-wayland IPC
