@@ -29,7 +29,7 @@ impl WlDisplay for Lease<Display> {
     fn sync(mut self, client: &mut Client, callback: NewId) -> Option<Self> {
         // Currently Client::upgrade is unsafe as it creates a lease which would cause API UB
         // This choice is under review as there is no risk of any memory unsafety
-        unsafe { client.upgrade(callback, Callback) }.done(client, self.event_serial);
+        unsafe { client.upgrade(callback, Callback) }.done(client, self.event_serial).ok();
         self.event_serial = self.event_serial.wrapping_add(1);
         Some(self)
     }
