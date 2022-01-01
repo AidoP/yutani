@@ -91,11 +91,7 @@ impl<P: Protocol> Client<P> {
     }
     /// Send a global error event to the client
     pub fn error(&mut self, object: u32, error: u32, msg: &str) {
-        let mut message = Message {
-            object: 1,
-            opcode: 0,
-            args: vec![]
-        };
+        let mut message = Message::new(1, 0);
         message.push_u32(object as _);
         message.push_u32(error as _);
         message.push_str(msg);

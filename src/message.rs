@@ -1,4 +1,5 @@
-use std::io::{self, Write};
+use std::{os::unix::net::{UnixStream, SocketAncillary}, io::IoSlice};
+
 use crate::common::*;
 
 /// A message over the wire
@@ -11,9 +12,20 @@ pub struct Message {
     /// The event or request to carry out
     pub opcode: u16,
     /// The untyped arguments to pass to the callee
-    pub args: Vec<u32>
+    pub args: Vec<u32>,
+    /// The file descriptor arguments
+    pub fds: Vec<i32>
 }
 impl Message {
+    /// Create a new message with no arguments
+    pub fn new(object: u32, opcode: u16) -> Self {
+        Self {
+            object,
+            opcode,
+            args: vec![],
+            fds: vec![]
+        }
+    }
     /// Decode the next message directly off the wire
     pub fn read(messages: &mut RingBuffer) -> Result<Self> {
         let object = u32::from_ne_bytes(messages.take()?);
@@ -22,7 +34,7 @@ impl Message {
         let opcode = p as u16;
 
         if message_size & 0b11 != 0 || message_size < 8 {
-            return Err(DispatchError::IOError(io::ErrorKind::InvalidData.into()))
+            return Err(DispatchError::IOError(std::io::ErrorKind::InvalidData.into()))
         }
         // TODO: A vec with a small stack buffer will see a large speed increase
         let mut args = vec![0; message_size as usize - 8];
@@ -31,18 +43,25 @@ impl Message {
         Ok(Self {
             object,
             opcode,
-            args
+            args,
+            fds: Vec::new()
         })
     }
     /// Send the message along the wire for a given interface version
-    pub fn send<W: Write>(self, writer: &mut W) -> io::Result<()> {
+    pub fn send(self, stream: &mut UnixStream) -> Result<()> {
         let args_size = self.args.len() * std::mem::size_of::<u32>();
         let message_size = 8 + args_size;
-        writer.write_all(&self.object.to_ne_bytes())?;
         let info = (message_size << 16) as u32 | self.opcode as u32;
-        writer.write_all(&info.to_ne_bytes())?;
-        let args: &[u8] = unsafe { std::slice::from_raw_parts(self.args.as_ptr() as *const u8, args_size) };
-        writer.write_all(args)?;
+
+        // TODO: allocate the correct amount of memory to fit all of the file descriptors
+        let mut ancillary_data = [0u8; 256];
+        let mut ancillary = SocketAncillary::new(&mut ancillary_data);
+        ancillary.add_fds(&self.fds);
+        stream.send_vectored_with_ancillary(&[
+            IoSlice::new(&self.object.to_ne_bytes()),
+            IoSlice::new(&info.to_ne_bytes()),
+            IoSlice::new(unsafe { std::slice::from_raw_parts(self.args.as_ptr() as *const u8, args_size) })
+        ], &mut ancillary)?;
         Ok(())
     }
     /// Get an adapter over the arguments
@@ -94,6 +113,10 @@ impl Message {
             3 => self.args.push(u32::from_ne_bytes([r[0], r[1], r[2], 0])),
             _ => unreachable!()
         }
+    }
+    /// Push a file descriptor to the list of arguments
+    pub fn push_fd(&mut self, fd: i32) {
+        self.fds.push(fd)
     }
 }
 
