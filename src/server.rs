@@ -1,10 +1,10 @@
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
     fs,
     fmt,
     io,
     marker::PhantomData,
-    os::unix::{net::{UnixListener, UnixStream}},
+    os::unix::{net::{UnixListener, UnixStream}, prelude::RawFd},
     ops::{Deref, DerefMut}
 };
 
@@ -36,6 +36,8 @@ impl<P: Protocol> Server<P> {
             objects.insert(1, Some(P::default()));
             let mut client = Client {
                 stream,
+                messages: Default::default(),
+                file_descriptors: Default::default(),
                 objects
             };
             loop {
@@ -65,12 +67,15 @@ impl<P: Protocol> DerefMut for Server<P> {
 /// Clients own their resources but may lease them out during dispatch
 pub struct Client<P: Protocol> {
     stream: UnixStream,
+    messages: RingBuffer,
+    file_descriptors: VecDeque<RawFd>,
     objects: HashMap<u32, Option<P>>
 }
 impl<P: Protocol> Client<P> {
     /// Wait for the next message and execute it
     pub fn dispatch(&mut self) -> Result<()> {
-        let message = Message::read(&mut self.stream)?;
+        self.messages.receive(&mut self.file_descriptors, &self.stream)?;
+        let message = Message::read(&mut self.messages)?;
         let lease = self.lease(message.object)?;
         let id = lease.id;
         if let Some(lease) = Protocol::request(lease, self, message)? {
@@ -95,6 +100,10 @@ impl<P: Protocol> Client<P> {
         message.push_u32(error as _);
         message.push_str(msg);
         message.send(&mut self.stream).unwrap();
+    }
+    /// Collect the file descriptors from the socket's ancillary data
+    pub fn next_fd(&mut self) -> Result<RawFd> {
+        self.file_descriptors.pop_front().ok_or(DispatchError::ExpectedArgument("fd"))
     }
     /// The id of the Display object
     pub const DISPLAY: u32 = 1;

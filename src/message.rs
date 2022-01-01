@@ -1,5 +1,5 @@
-use std::io::{self, Read, Write};
-use crate::{DispatchError, types::*};
+use std::io::{self, Write};
+use crate::common::*;
 
 /// A message over the wire
 /// Each message refers to an action to carry out on an Object with given arguments defined by the interface that the object implements
@@ -15,26 +15,18 @@ pub struct Message {
 }
 impl Message {
     /// Decode the next message directly off the wire
-    pub fn read<R: Read>(reader: &mut R) -> io::Result<Self> {
-        let mut buffer: [u8; 4] = 0u32.to_ne_bytes();
-        reader.read_exact(&mut buffer)?;
-        let object = u32::from_ne_bytes(buffer);
-        reader.read_exact(&mut buffer)?;
-        let p = u32::from_ne_bytes(buffer);
-        let mut message_size = (p >> 16) as u16;
+    pub fn read(messages: &mut RingBuffer) -> Result<Self> {
+        let object = u32::from_ne_bytes(messages.take()?);
+        let p = u32::from_ne_bytes(messages.take()?);
+        let message_size = (p >> 16) as u16;
         let opcode = p as u16;
 
         if message_size & 0b11 != 0 || message_size < 8 {
-            return Err(io::ErrorKind::InvalidData.into())
+            return Err(DispatchError::IOError(io::ErrorKind::InvalidData.into()))
         }
         // TODO: A vec with a small stack buffer will see a large speed increase
-        let mut args = vec![];
-        message_size -= 8;
-        while message_size > 0 {
-            reader.read_exact(&mut buffer)?;
-            args.push(u32::from_ne_bytes(buffer));
-            message_size -= 4;
-        }
+        let mut args = vec![0; message_size as usize - 8];
+        unsafe { messages.take_into_raw(args.as_mut_ptr() as *mut u8, args.len() * std::mem::size_of::<u32>())? };
 
         Ok(Self {
             object,
@@ -130,7 +122,7 @@ impl<'a> Args<'a> {
         self.next_i32().map(|i| Fixed(i))
     }
     /// Interpret the next argument as a byte string
-    /// TODO: look into Cow and possibly &str if Wayland strings can be losslessly converted to UTF-8
+    /// TODO: look into &str if Wayland strings can be losslessly converted to UTF-8
     pub fn next_str(&mut self) -> Option<&'a [u8]> {
         let mut len = self.next_u32()? as usize;
         // Round up to the next aligned index
@@ -149,6 +141,7 @@ impl<'a> Args<'a> {
         }
 
     }
+    // TODO: Transmute to useful types with generic implementation. Can it be done safely?
     /// Interpret the next argument as a byte slice
     /// Similar to `next_str()` but can contain null bytes
     pub fn next_array(&mut self) -> Option<&'a [u8]> {
@@ -162,6 +155,7 @@ impl<'a> Args<'a> {
         if self.args.len() * std::mem::size_of::<u32>() < aligned_len {
             None
         } else {
+            // TODO: Don't trust user input
             // Transmute to a &[u8], careful to update the length to be in the correct units and to keep the same lifetime
             let array: &'a [u8] = unsafe { std::slice::from_raw_parts(self.args.as_ptr() as *const u8, len) };
             self.args = &self.args[aligned_len / std::mem::size_of::<u32>()..];
@@ -170,7 +164,7 @@ impl<'a> Args<'a> {
 
     }
     /// Interpret the next argument as a new_id of which we do not know the type of
-    pub fn next_new_id(&mut self) -> Result<NewId, DispatchError> {
+    pub fn next_new_id(&mut self) -> Result<NewId> {
         let interface = std::str::from_utf8(self.next_str().ok_or(DispatchError::ExpectedArgument("new_id interface"))?)
             .map_err(|e| DispatchError::Utf8Error(e, "Interface name for a generic new_id"))?;
         Ok(NewId {
@@ -178,9 +172,5 @@ impl<'a> Args<'a> {
             version: self.next_u32().ok_or(DispatchError::ExpectedArgument("new_id version"))?,
             id: self.next_u32().ok_or(DispatchError::ExpectedArgument("new_id id"))?
         })
-    }
-    /// Collect a file descriptor from the ancillary data
-    pub fn next_fd(&mut self) -> ! {
-        unimplemented!(/* https://github.com/rust-lang/rust/issues/76915 scheduled for Rust 1.50 */)
     }
 }
