@@ -7,6 +7,9 @@ This is **not** a Rust binding for libwayland, rather, this crate is a standalon
 # Generic IPC
 `wl` makes no assumptions about the implemented interfaces - the only requirement is a single default display object. This makes `wl` a fully fledged IPC library outside of the high-level Wayland protocol. Once client support is close to completion expect to see an example IPC system for media controls.
 
+# Requirements
+The nightly channel is currently required to access ancillary data in Unix Domain Sockets.
+
 # Why TOML
 
 [Wayland protocols](https://gitlab.freedesktop.org/wayland/wayland-protocols) are officially described in XML, so why use TOML for this crate?
