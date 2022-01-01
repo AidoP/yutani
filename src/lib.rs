@@ -240,7 +240,6 @@ impl RingBuffer {
     /// ```
     pub fn add_reader(&mut self, count: usize) {
         let count = count.min(self.len());
-        eprintln!("count {}", count);
         self.reader = (self.reader + count) & Self::MASK
     }
     /// Get the writer location 
@@ -285,7 +284,7 @@ impl RingBuffer {
         let mut ancillary = SocketAncillary::new(&mut ancillary_buffer);
         // What is the state of the buffer on failure?
         let read = stream.recv_vectored_with_ancillary(&mut buffer, &mut ancillary)?;
-        self.add_reader(read);
+        self.add_writer(read);
         for message in ancillary.messages() {
             if let Ok(data) = message {
                 match data {
