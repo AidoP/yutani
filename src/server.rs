@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs,
     io,
-    ops::{Deref, DerefMut}, any::Any
+    ops::{Deref, DerefMut}, any::Any, fmt::{self, Display}
 };
 
 use crate::common::*;
@@ -277,6 +277,11 @@ impl<T: ?Sized> Deref for Lease<T> {
 impl<T: ?Sized> DerefMut for Lease<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut (*self.ptr).value }
+    }
+}
+impl<T: ?Sized> Display for Lease<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "object {}", self.id)
     }
 }
 impl<T: ?Sized> Drop for Lease<T> {
