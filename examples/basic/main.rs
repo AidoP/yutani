@@ -1,3 +1,4 @@
+use std::any::Any;
 use wl::{server::prelude::*, Result};
 
 fn main() {
@@ -56,7 +57,14 @@ struct Registry;
 #[protocol("wayland.toml")]
 impl WlRegistry for Lease<Registry> {
     fn bind(&mut self, client: &mut Client, name: u32, id: NewId) -> Result<()> {
-        todo!()
+        match name {
+            Shm::UID => { client.insert(id, Shm)?; }
+            Compositor::UID => { client.insert(id, Compositor)?; }
+            Subcompositor::UID => { client.insert(id, Compositor)?; }
+            WmBase::UID => { client.insert(id, Compositor)?; }
+            _ => { display(client)?.error(client, self.object(), 1, format!("Unknown global {}", name))?; }
+        }
+        Ok(())
     }
 }
 
@@ -78,9 +86,44 @@ impl Global for Compositor {
 #[protocol("wayland.toml")]
 impl WlCompositor for Lease<Compositor> {
     fn create_surface(&mut self, client: &mut Client, id: NewId) -> Result<()> {
-        todo!()
+        client.insert(id, Surface)?;
+        Ok(())
     }
     fn create_region(&mut self, client: &mut Client, id: NewId) -> Result<()> {
+        todo!()
+    }
+}
+struct Surface;
+#[protocol("wayland.toml")]
+impl WlSurface for Lease<Surface> {
+    fn destroy(&mut self, client: &mut Client) -> Result<()> {
+        todo!()
+    }
+    fn attach(&mut self, client: &mut Client, buffer: u32, x: i32, y: i32) -> Result<()> {
+        todo!()
+    }
+    fn damage(&mut self, client: &mut Client, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
+        todo!()
+    }
+    fn frame(&mut self, client: &mut Client, callback: NewId) -> Result<()> {
+        todo!()
+    }
+    fn set_opaque_region(&mut self, client: &mut Client, region: u32) -> Result<()> {
+        todo!()
+    }
+    fn set_input_region(&mut self, client: &mut Client, region: u32) -> Result<()> {
+        todo!()
+    }
+    fn set_buffer_transform(&mut self, client: &mut Client, transform: i32) -> Result<()> {
+        todo!()
+    }
+    fn set_buffer_scale(&mut self, client: &mut Client, scale: i32) -> Result<()> {
+        todo!()
+    }
+    fn damage_buffer(&mut self, client: &mut Client, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
+        todo!()
+    }
+    fn commit(&mut self, client: &mut Client) -> Result<()> {
         todo!()
     }
 }
