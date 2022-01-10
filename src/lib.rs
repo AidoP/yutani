@@ -1,29 +1,33 @@
-#![feature(unix_socket_ancillary_data)]
 #![feature(maybe_uninit_uninit_array, maybe_uninit_array_assume_init)]
-#![feature(result_option_inspect)]
-use std::{
-    fmt,
-    io,
-    os::unix::{net::UnixStream, prelude::RawFd}, collections::VecDeque,
-};
+#![feature(io_error_more)]
+#![feature(box_syntax)]
+#![feature(result_flattening)]
+#![feature(unsize)]
+#![feature(coerce_unsized)]
+#![feature(dispatch_from_dyn)]
+use std::{fmt, io};
 
 pub mod server;
 pub use server::Server;
 
 mod types;
-pub use types::{Fixed, NewId};
+pub use types::{Fixed, NewId, Fd, Array};
 
 mod message;
 pub use message::Message;
+
+pub mod socket;
 
 mod common {
     use std::env;
     pub use crate::{
         types::*,
+        socket::*,
         DispatchError,
         message::Message,
         Result,
-        RingBuffer
+        RingBuffer,
+        Object
     };
 
     pub fn get_socket_path() -> String {
@@ -38,28 +42,26 @@ mod common {
         }
     }
 }
-
-pub struct Client(UnixStream);
-impl Client {
-    pub fn connect() -> io::Result<Self> {
-        UnixStream::connect(common::get_socket_path()).map(|socket| Self(socket))
-    }
-    pub fn send(&mut self, bytes: &[u8]) {
-        use io::Write;
-        self.0.write_all(bytes).unwrap();
-        self.0.flush().unwrap();
-        std::thread::sleep(std::time::Duration::from_secs(1));
-        self.0.shutdown(std::net::Shutdown::Both).unwrap();
-    }
+lazy_static::lazy_static! {
+    pub static ref DEBUG: bool = cfg!(debug_assertions) || std::env::var("WAYLAND_DEBUG").is_ok();
 }
 
+pub trait Object {
+    fn object(&self) -> u32;
+}
+impl Object for u32 {
+    fn object(&self) -> u32 {
+        *self
+    }
+}
 
 pub type Result<T> = std::result::Result<T, DispatchError>;
 #[derive(Debug)]
 pub enum DispatchError {
     IOError(io::Error),
     BufferEmpty,
-    ObjectTaken(u32),
+    ObjectNull,
+    ObjectLeased(u32),
     ObjectExists(u32),
     ObjectNotFound(u32),
     InvalidOpcode(u32, u16, &'static str),
@@ -72,7 +74,8 @@ impl fmt::Display for DispatchError {
         match self {
             DispatchError::IOError(e) => write!(f, "{}", e),
             DispatchError::BufferEmpty => write!(f, "Buffer is empty"),
-            DispatchError::ObjectTaken(object_id) => write!(f, "Object {} already in use", object_id),
+            DispatchError::ObjectNull => write!(f, "Null object accessed"),
+            DispatchError::ObjectLeased(object_id) => write!(f, "Object {} already in use", object_id),
             DispatchError::ObjectExists(object_id) => write!(f, "Cannot create object {} as it already exists", object_id),
             DispatchError::ObjectNotFound(object_id) => write!(f, "Object {} does not exist", object_id),
             DispatchError::InvalidOpcode(object_id, opcode, interface) => write!(f, "Opcode {} is invalid for object {} implementing interface `{}`", opcode, object_id, interface),
@@ -108,6 +111,7 @@ pub struct RingBuffer {
     reader: usize
 }
 impl RingBuffer {
+    // Must be a power of 2 for the mask to work
     pub const SIZE: usize = 4096;
     pub const MASK: usize = Self::SIZE - 1;
 
@@ -264,38 +268,20 @@ impl RingBuffer {
         let count = count.min(Self::SIZE - self.len() - 1);
         self.writer = (self.writer + count) & Self::MASK
     }
-    /// Fill the buffer with the next message and retrieve ancillary data
-    pub fn receive(&mut self, ancillary_data: &mut VecDeque<RawFd>, stream: &UnixStream) -> io::Result<()> {
-        use std::io::IoSliceMut;
-        use std::os::unix::net::{SocketAncillary, AncillaryData};
+    pub(crate) fn iov_mut(&mut self) -> [socket::IoVec; 2] {
+        use socket::IoVec;
         let (a, b) = self.buffer.split_at_mut(self.writer);
-        let mut buffer = if self.reader > self.writer {
+        if self.reader > self.writer {
             [
-                IoSliceMut::new(&mut b[..self.reader-self.writer]),
-                IoSliceMut::new(&mut [])
+                IoVec::from(&mut b[..self.reader-self.writer]),
+                IoVec::empty()
             ]
         } else {
             [
-                IoSliceMut::new(b),
-                IoSliceMut::new(&mut a[..self.reader]),
+                IoVec::from(b),
+                IoVec::from(&mut a[..self.reader]),
             ]
-        };
-        let mut ancillary_buffer = [0; 256];
-        let mut ancillary = SocketAncillary::new(&mut ancillary_buffer);
-        // What is the state of the buffer on failure?
-        let read = stream.recv_vectored_with_ancillary(&mut buffer, &mut ancillary)?;
-        self.add_writer(read);
-        for message in ancillary.messages() {
-            if let Ok(data) = message {
-                match data {
-                    AncillaryData::ScmRights(fds) => for fd in fds {
-                        ancillary_data.push_back(fd)
-                    },
-                    _ => ()
-                }
-            }
         }
-        Ok(())
     }
 }
 impl Default for RingBuffer {
