@@ -8,7 +8,7 @@ This is **not** a Rust binding for libwayland, rather, this crate is a standalon
 `wl` makes no assumptions about the implemented interfaces - the only requirement is a single default display object. This makes `wl` a fully fledged IPC library outside of the high-level Wayland protocol. Once client support is close to completion expect to see an example IPC system for media controls.
 
 # Requirements
-The nightly channel is currently required to access ancillary data in Unix Domain Sockets.
+The nightly channel is currently required for various unstable features.
 
 # Why TOML
 
@@ -24,8 +24,7 @@ The nightly channel is currently required to access ancillary data in Unix Domai
 Wayland Protocols converted to TOML are available under [wl-protocols](https://github.com/AidoP/wl-protocols). The default search path for protocol specifications is `protocol/` and can be overriden by setting the `WL_PROTOCOLS` environment variable.
 
 # Example Usage
-
-A minimal example implementing the assumed `wl_display` bootstrapping interface is available at [`examples/basic/`](https://github.com/AidoP/wl/tree/main/examples/basic).
+A minimal example implementing the core of the wayland protocol is available at [`examples/basic/`](https://github.com/AidoP/wl/tree/main/examples/basic).
 
 # Goals
 - Protocol compliance: compatabilty with libwayland clients and servers
