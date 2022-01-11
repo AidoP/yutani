@@ -55,7 +55,7 @@ impl Server {
                 loop {
                     if let Err(e) = client.dispatch() {
                         // TODO: Correct error handling - not all errors are fatal
-                        eprintln!("Dispatch Error: {:?}", e);
+                        eprintln!("Dispatch Error: {}", e);
                         break
                     }
                 }
@@ -150,6 +150,14 @@ impl Client {
             self.serial = self.serial.wrapping_add(1);
         }
         self.serial
+    }
+    /// Remove an object from the client by lease
+    pub fn drop<T: ?Sized>(&mut self, lease: &mut Lease<T>) -> Result<()> {
+        if let Some(_) = self.objects.remove(&lease.id) {
+            Ok(())
+        } else {
+            Err(DispatchError::ObjectNotFound(lease.id))
+        }
     }
     /// Remove an object from the client, returning a lease
     pub fn remove<T: 'static + Dispatch>(&mut self, id: u32) -> Result<Lease<T>> {
