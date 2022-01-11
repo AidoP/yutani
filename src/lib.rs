@@ -54,6 +54,11 @@ impl Object for u32 {
         *self
     }
 }
+impl fmt::Display for dyn Object {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "object {}", self.object())
+    }
+}
 
 pub type Result<T> = std::result::Result<T, DispatchError>;
 #[derive(Debug)]
