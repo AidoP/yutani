@@ -103,10 +103,10 @@ impl Message {
         )
     }
     /// Push an array of bytes to the list of arguments
-    pub fn push_bytes(&mut self, bytes: &[u8]) {
-        let chunks = bytes.as_ref().chunks_exact(std::mem::size_of::<u32>());
+    pub fn push_array(&mut self, array: Array) {
+        let chunks = array.as_slice().chunks_exact(std::mem::size_of::<u32>());
         let r = chunks.remainder();
-        self.args.push(bytes.as_ref().len() as u32 | 0b11);
+        self.args.push(array.as_slice().len() as u32 | 0b11);
         self.args.extend(chunks.map(|b| u32::from_ne_bytes([b[0], b[1], b[2], b[3]])));
         match r.len() {
             0 => (),
