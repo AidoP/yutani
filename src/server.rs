@@ -55,7 +55,7 @@ impl Server {
                 loop {
                     if let Err(e) = client.dispatch() {
                         // TODO: Correct error handling - not all errors are fatal
-                        eprintln!("Dispatch Error: {:?}", e);
+                        eprintln!("Dispatch Error: {}", e);
                         break
                     }
                 }
@@ -151,6 +151,14 @@ impl Client {
         }
         self.serial
     }
+    /// Remove an object from the client by lease
+    pub fn drop<T: ?Sized>(&mut self, lease: &mut Lease<T>) -> Result<()> {
+        if let Some(_) = self.objects.remove(&lease.id) {
+            Ok(())
+        } else {
+            Err(DispatchError::ObjectNotFound(lease.id))
+        }
+    }
     /// Remove an object from the client, returning a lease
     pub fn remove<T: 'static + Dispatch>(&mut self, id: u32) -> Result<Lease<T>> {
         if let Some(r) = self.objects.remove(&id) {
@@ -176,6 +184,8 @@ impl Client {
 #[repr(C)]
 pub struct LeaseBox<T: ?Sized> {
     leased: bool,
+    interface: &'static str,
+    version: u32,
     dispatch: fn(Lease<dyn Any>, &mut Client, Message) -> Result<()>,
     value: T
 }
@@ -189,7 +199,7 @@ pub struct Resident<T: ?Sized> {
 impl<T: Dispatch> Resident<T> {
     fn new(value: T) -> Self {
         Self {
-            ptr: Box::leak(box LeaseBox { leased: false, dispatch: T::dispatch, value })
+            ptr: Box::leak(box LeaseBox { leased: false, interface: T::INTERFACE, version: T::VERSION, dispatch: T::dispatch, value })
         }
     }
 }
@@ -244,7 +254,7 @@ impl<T: Dispatch> Lease<T> {
     /// Creates a lease that will never have a corresponding resident
     fn temporary(id: u32, value: T) -> Self {
         Self {
-            ptr: Box::leak(box LeaseBox { leased: false, dispatch: T::dispatch, value }),
+            ptr: Box::leak(box LeaseBox { leased: false, interface: T::INTERFACE, version: T::VERSION, dispatch: T::dispatch, value }),
             id
         }
     }
@@ -266,6 +276,12 @@ impl Lease<dyn Any> {
         unsafe {
             ((*self.ptr).dispatch)(self, client, message)
         }
+    }
+    pub fn interface(&self) -> &'static str {
+        unsafe { (*self.ptr).interface }
+    }
+    pub fn version(&self) -> u32 {
+        unsafe { (*self.ptr).version }
     }
 }
 impl<T: ?Sized> Deref for Lease<T> {

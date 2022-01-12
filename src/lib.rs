@@ -43,10 +43,12 @@ mod common {
     }
 }
 lazy_static::lazy_static! {
+    /// Indicates that messages should debug-print
     pub static ref DEBUG: bool = cfg!(debug_assertions) || std::env::var("WAYLAND_DEBUG").is_ok();
 }
 
-pub trait Object {
+/// An item that represents an object
+pub trait Object: fmt::Display {
     fn object(&self) -> u32;
 }
 impl Object for u32 {
@@ -64,6 +66,7 @@ pub enum DispatchError {
     ObjectLeased(u32),
     ObjectExists(u32),
     ObjectNotFound(u32),
+    EnumVariantInvalid(&'static str, u32),
     InvalidOpcode(u32, u16, &'static str),
     InvalidObject(&'static str, &'static str),
     ExpectedArgument(&'static str),
@@ -78,6 +81,7 @@ impl fmt::Display for DispatchError {
             DispatchError::ObjectLeased(object_id) => write!(f, "Object {} already in use", object_id),
             DispatchError::ObjectExists(object_id) => write!(f, "Cannot create object {} as it already exists", object_id),
             DispatchError::ObjectNotFound(object_id) => write!(f, "Object {} does not exist", object_id),
+            DispatchError::EnumVariantInvalid(enum_name, variant) => write!(f, "Enum {:?} has no variant \"{}\"", enum_name, variant),
             DispatchError::InvalidOpcode(object_id, opcode, interface) => write!(f, "Opcode {} is invalid for object {} implementing interface `{}`", opcode, object_id, interface),
             DispatchError::InvalidObject(expected, got) => write!(f, "Expected object of interface `{}` but instead got `{}`", expected, got),
             DispatchError::ExpectedArgument(argument) => write!(f, "Expected argument of type {}", argument),

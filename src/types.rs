@@ -3,7 +3,7 @@ use std::{fmt::{self, Display}, ops::{Deref, DerefMut}};
 use crate::common::*;
 
 /// A fixed-point decimal type as defined for the Wayland protocol
-/// TODO: -0 != 0, float conversion and impl Ord
+// TODO: -0 != 0, float conversion and impl Ord
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Fixed(pub i32);
@@ -39,9 +39,10 @@ impl Into<i32> for Fixed {
 }
 
 /// An id for an object that was requested to be created
+/// 
 /// Generally the interface of the new object is known ahead of time
-/// thanks to the agreed upon protocol, however in some instances a NewId may be generic
-/// In such cases the name of the interface to instrantiate an object for is passed along side
+/// thanks to the agreed upon protocol, however in some instances a NewId may be generic.
+/// In such cases, the name of the interface to instrantiate an object for is passed along side
 #[derive(Debug)]
 pub struct NewId {
     pub id: u32,
