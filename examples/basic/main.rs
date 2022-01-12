@@ -1,10 +1,41 @@
 use wl::{server::prelude::*, Result};
 
-fn main() {
-    let server = wl::Server::bind().unwrap();
-    server.start::<Display>()
+#[protocol("protocol/wayland.toml")]
+mod wayland {
+    type WlDisplay = super::WlDisplay;
+    type WlCallback = super::WlCallback;
+    type WlRegistry = super::WlRegistry;
 }
 
+#[derive(Default)]
+struct WlDisplay;
+impl wayland::WlDisplay for Lease<WlDisplay> {
+    fn sync(&mut self, client: &mut Client, callback: NewId) -> Result<()> {
+        Ok(())
+    }
+    fn get_registry(&mut self, client: &mut Client, registry: NewId) -> Result<()> {
+        let mut registry = client.insert(registry, WlRegistry)?;
+        use wayland::WlRegistry;
+        registry.global(client, 0, crate::WlRegistry::INTERFACE, crate::WlRegistry::VERSION)?;
+        Ok(())
+    }
+}
+struct WlCallback;
+impl wayland::WlCallback for Lease<WlCallback> {
+}
+struct WlRegistry;
+impl wayland::WlRegistry for Lease<WlRegistry> {
+    fn bind(&mut self, client: &mut Client, global: u32, id: NewId) -> Result<()> {
+        Ok(())
+    }
+}
+
+//protocol!{"protocol/xdg-shell.toml"}
+fn main() {
+    let server = wl::Server::bind().unwrap();
+    server.start::<WlDisplay>()
+}
+/*
 /// Convenience function to avoid type inference issues
 fn display(client: &mut Client) -> Result<Lease<Display>> {
     client.get(Client::DISPLAY)
@@ -102,7 +133,6 @@ pub struct WmBase;
 impl Global for WmBase {
     const UID: u32 = 4;
 }
-#[protocol("xdg-shell.toml")]
 impl XdgWmBase for Lease<WmBase> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
         todo!()
@@ -116,4 +146,4 @@ impl XdgWmBase for Lease<WmBase> {
     fn pong(&mut self, client: &mut Client, serial: u32) -> Result<()> {
         todo!()
     }
-}
+}*/
