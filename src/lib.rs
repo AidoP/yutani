@@ -46,17 +46,12 @@ lazy_static::lazy_static! {
     pub static ref DEBUG: bool = cfg!(debug_assertions) || std::env::var("WAYLAND_DEBUG").is_ok();
 }
 
-pub trait Object {
+pub trait Object: fmt::Display {
     fn object(&self) -> u32;
 }
 impl Object for u32 {
     fn object(&self) -> u32 {
         *self
-    }
-}
-impl fmt::Display for dyn Object {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "object {}", self.object())
     }
 }
 
