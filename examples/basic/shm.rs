@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use wl::{server::prelude::*, Result};
+use wl::server::prelude::*;
 use crate::{Global, wayland};
 
 pub struct WlShm;

@@ -13,6 +13,9 @@ pub mod prelude {
         types::*,
         Object,
         server::{
+            Result,
+            ErrorHandler,
+            DispatchErrorHandler,
             Lease,
             Server,
             Client,
@@ -40,7 +43,7 @@ impl Server {
             }
         }
     }
-    pub fn start<T: 'static + Dispatch + Default>(self) -> ! {
+    pub fn start<T: 'static + Dispatch + Default, E: 'static + DispatchErrorHandler + Default>(self) -> ! {
         for stream in self.0 {
             //std::thread::spawn(|| {
                 let mut client = Client {
@@ -48,15 +51,17 @@ impl Server {
                     messages: Default::default(),
                     fds: Default::default(),
                     objects: Default::default(),
+                    error_handler: Some(Box::new(E::default())),
                     serial: 0
                 };
                 client.add(Null).unwrap();
                 client.add(T::default()).unwrap();
                 loop {
                     if let Err(e) = client.dispatch() {
-                        // TODO: Correct error handling - not all errors are fatal
-                        eprintln!("Dispatch Error: {}", e);
-                        break
+                        if let Err(e) = e.try_handle(&mut client) {
+                            eprintln!("{}", e);
+                            break
+                        }
                     }
                 }
             //});
@@ -74,6 +79,7 @@ pub struct Client {
     // TODO: Consider limiting. As is, a client can send FD's until the server is starved, causing a DoS
     fds: VecDeque<Fd>,
     objects: HashMap<u32, Resident<dyn Any>>,
+    error_handler: Option<Box<dyn DispatchErrorHandler>>,
     /// A counter for generating unique ID's
     serial: u32
 }
@@ -102,34 +108,35 @@ impl Client {
         message.send(&mut self.stream).unwrap();
     }*/
     /// Get the next available file descriptor from the queue
-    pub fn next_fd(&mut self) -> Result<Fd> {
-        self.fds.pop_front().ok_or(DispatchError::ExpectedArgument("fd"))
+    pub fn next_fd(&mut self) -> std::result::Result<Fd, DispatchError> {
+        self.fds.pop_front().ok_or(DispatchError::ExpectedArgument { data_type: "fd" })
     }
     /// The id of the Display object
     pub const DISPLAY: u32 = 1;
     /// Borrow an object from the client
     pub fn get<T: 'static + Dispatch>(&self, id: u32) -> Result<Lease<T>> {
-        self.objects
-            .get(&id)
-            .map(|r| r.lease(id).ok_or(DispatchError::ObjectLeased(id)))
-            .ok_or(DispatchError::ObjectNotFound(id)).flatten()
-            .map(|l| l.downcast()).flatten()
+        if let Some(object) = self.objects.get(&id) {
+            object.lease(id)?.downcast()
+        } else {
+            Err(DispatchError::ObjectNotFound(id).into())
+        }
     }
     /// Borrow an object from the client, not knowing the static type
     pub fn get_any(&self, id: u32) -> Result<Lease<dyn Any>> {
-        self.objects
-            .get(&id)
-            .map(|r| r.lease(id).ok_or(DispatchError::ObjectLeased(id)))
-            .ok_or(DispatchError::ObjectNotFound(id)).flatten()
+        if let Some(object) = self.objects.get(&id) {
+            object.lease(id)
+        } else {
+            Err(DispatchError::ObjectNotFound(id).into())
+        }
     }
     /// Attempt to insert an object for the given ID
     pub fn insert<T: 'static + Dispatch>(&mut self, id: impl Object, object: T) -> Result<Lease<T>> {
         let id = id.object();
         if self.objects.contains_key(&id) {
-            Err(DispatchError::ObjectExists(id))
+            Err(DispatchError::ObjectExists(id).into())
         } else {
             let object = Resident::new(object);
-            let lease = object.lease(id).unwrap();
+            let lease = object.lease(id)?;
             self.objects.insert(id, object);
             //Dispatch::init(&mut lease, self)?;
             Ok(lease)
@@ -156,27 +163,36 @@ impl Client {
         if let Some(_) = self.objects.remove(&lease.id) {
             Ok(())
         } else {
-            Err(DispatchError::ObjectNotFound(lease.id))
+            Err(DispatchError::ObjectNotFound(lease.id).into())
         }
     }
     /// Remove an object from the client, returning a lease
     pub fn remove<T: 'static + Dispatch>(&mut self, id: u32) -> Result<Lease<T>> {
         if let Some(r) = self.objects.remove(&id) {
             r.lease(id)
-                .ok_or(DispatchError::ObjectLeased(id))
                 .and_then(|l| l.downcast())
         } else {
-            Err(DispatchError::ObjectNotFound(id))
+            Err(DispatchError::ObjectNotFound(id).into())
         }
     }
     /// Create an object that is never stored
     pub fn temporary<T: Dispatch>(&mut self, NewId { id, ..}: NewId, object: T) -> Result<Lease<T>> {
         if self.objects.contains_key(&id) {
-            Err(DispatchError::ObjectExists(id))
+            Err(DispatchError::ObjectExists(id).into())
         } else {
             let lease = Lease::temporary(id, object);
             //Dispatch::init(&mut lease, self)?;
             Ok(lease)
+        }
+    }
+    /// Attempt to handle a dispatch error using the registered error handler
+    fn handle(&mut self, error: DispatchError) -> Result<()> {
+        if let Some(mut handler) = self.error_handler.take() {
+            handler.handle(self, error)?;
+            self.error_handler = Some(handler);
+            Ok(())
+        } else {
+            Err(SystemError::NoDispatchHandler(error).into())
         }
     }
 }
@@ -222,13 +238,13 @@ impl<T: ?Sized> Resident<T> {
             }
         }
     }
-    fn lease(&self, id: u32) -> Option<Lease<T>> {
+    fn lease(&self, id: u32) -> Result<Lease<T>> {
         unsafe {
             if (*self.ptr).leased {
-                None
+                Err(SystemError::ObjectLeased(id).into())
             } else {
                 (*self.ptr).leased = true;
-                Some(Lease { ptr: self.ptr, id })
+                Ok(Lease { ptr: self.ptr, id })
             }
         }
     }
@@ -268,7 +284,11 @@ impl Lease<dyn Any> {
             std::mem::forget(self);
             Ok(Lease { id, ptr })
         } else {
-            Err(DispatchError::InvalidObject(T::INTERFACE, "unknown"))
+            Err(DispatchError::UnexpectedObjectType {
+                object: self.id,
+                had_interface: self.interface(),
+                expected_interface: T::INTERFACE
+            }.into())
         }
     }
     #[inline]
@@ -332,7 +352,62 @@ impl Dispatch for Null {
     const INTERFACE: &'static str = "null";
     const VERSION: u32 = 0;
     fn dispatch(_: Lease<dyn Any>, _: &mut Client, _: Message) -> Result<()> {
-        Err(DispatchError::ObjectNull)
+        Err(DispatchError::ObjectNull.into())
     }
     //fn init(_: &mut Lease<Self>, _: &mut Client) -> Result<()>{ Ok(()) }
+}
+
+
+pub type Result<T> = std::result::Result<T, Error>;
+pub trait ErrorHandler: fmt::Display {
+    fn handle(&mut self, client: &mut Client) -> Result<()>;
+}
+pub trait DispatchErrorHandler {
+    fn handle(&mut self, client: &mut Client, error: DispatchError) -> Result<()>;
+}
+pub enum Error {
+    /// An error that originates outside of the library, in protocol code
+    Protocol(Box<dyn ErrorHandler>),
+    /// An error that occurs during dispatch and can be handled by a user-designated error handler
+    Dispatch(DispatchError),
+    /// An error indicating that the connection to the client must be severed
+    System(SystemError)
+}
+impl Error {
+    fn try_handle(self, client: &mut Client) -> Result<()> {
+        match self {
+            Self::Protocol(mut handler) => handler.handle(client),
+            Self::Dispatch(error) => client.handle(error),
+            Self::System(error) => Err(Self::System(error)),
+        }
+    }
+}
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Protocol(error) => write!(f, "Protocol error could not be handled, {}", error),
+            Self::Dispatch(error) => write!(f, "Error during internal message handling, {}", error),
+            Self::System(error) => write!(f, "Unrecoverable error, {}", error)
+        }
+    }
+}
+impl fmt::Debug for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+impl From<SystemError> for Error {
+    fn from(error: SystemError) -> Self {
+        Error::System(error)
+    }
+}
+impl From<io::Error> for Error {
+    fn from(error: io::Error) -> Self {
+        Self::System(error.into())
+    }
+}
+impl From<DispatchError> for Error {
+    fn from(error: DispatchError) -> Self {
+        Error::Dispatch(error)
+    }
 }

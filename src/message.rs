@@ -27,35 +27,40 @@ impl Message {
     }
     /// Peek to see if a full message is available on the ring buffer
     pub fn available(messages: &RingBuffer) -> bool {
-        if let Ok([_, _, _, _, _, _, a, b]) = messages.copy() {
+        if let Some([_, _, _, _, _, _, a, b]) = messages.copy() {
             messages.len() >= u16::from_ne_bytes([a, b]) as usize
         } else {
             false
         }
     }
     /// Decode the next message directly off the wire
-    pub fn read(messages: &mut RingBuffer) -> Result<Self> {
-        let object = u32::from_ne_bytes(messages.take()?);
-        let p = u32::from_ne_bytes(messages.take()?);
+    /// 
+    /// `Message::available()` **must** be called first to ensure that there is a message to read,
+    /// otherwise the message buffer may enter an unrecoverable state and `Err(SystemError::CorruptMessage)` will be returned.
+    pub fn read(messages: &mut RingBuffer) -> Result<Self, SystemError> {
+        let object = u32::from_ne_bytes(messages.take().ok_or(SystemError::CorruptMessage)?);
+        let p = u32::from_ne_bytes(messages.take().ok_or(SystemError::CorruptMessage)?);
         let message_size = (p >> 16) as u16;
         let opcode = p as u16;
 
         if message_size & 0b11 != 0 || message_size < 8 {
-            return Err(DispatchError::IOError(std::io::ErrorKind::InvalidData.into()))
+            return Err(SystemError::CorruptMessage)
         }
         // TODO: A vec with a small stack buffer will see a large speed increase
         let mut args = vec![0; (message_size as usize / std::mem::size_of::<u32>()) - 2];
-        unsafe { messages.take_into_raw(args.as_mut_ptr() as *mut u8, args.len() * std::mem::size_of::<u32>())? };
-
-        Ok(Self {
-            object,
-            opcode,
-            args,
-            fds: Vec::new()
-        })
+        if unsafe { messages.take_into_raw(args.as_mut_ptr() as *mut u8, args.len() * std::mem::size_of::<u32>()) } {
+            Ok(Self {
+                object,
+                opcode,
+                args,
+                fds: Vec::new()
+            })
+        } else {
+            Err(SystemError::CorruptMessage)
+        }
     }
     /// Send the message along the wire for a given interface version
-    pub fn send(mut self, stream: &mut UnixStream) -> Result<()> {
+    pub fn send(mut self, stream: &mut UnixStream) -> Result<(), SystemError> {
         let args_size = self.args.len() * std::mem::size_of::<u32>();
         let message_size = 8 + args_size;
         let info = (message_size << 16) as u32 | self.opcode as u32;
@@ -140,47 +145,53 @@ pub struct Args<'a> {
 }
 impl<'a> Args<'a> {
     /// Interpret the next argument as an unsigned integer
-    pub fn next_u32(&mut self) -> Result<u32> {
+    pub fn next_u32(&mut self) -> Result<u32, DispatchError> {
         self.args.first().map(|&i| {
             self.args = &self.args[1..];
             i
-        }).ok_or(DispatchError::ExpectedArgument("uint"))
+        }).ok_or(DispatchError::ExpectedArgument {
+            data_type: "uint"
+        })
     }
     /// Interpret the next argument as a signed integer
-    pub fn next_i32(&mut self) -> Result<i32> {
+    pub fn next_i32(&mut self) -> Result<i32, DispatchError> {
         self.args.first().map(|&i| {
             self.args = &self.args[1..];
             i as i32
-        }).ok_or(DispatchError::ExpectedArgument("int"))
+        }).ok_or(DispatchError::ExpectedArgument {
+            data_type: "int"
+        })
     }
     /// Interpret the next argument as a Fixed-point decimal
-    pub fn next_fixed(&mut self) -> Result<Fixed> {
+    pub fn next_fixed(&mut self) -> Result<Fixed, DispatchError> {
         self.next_i32().map(|i| Fixed(i))
     }
     /// Interpret the next argument as a byte string
     /// TODO: Should we be doing a lossy conversion? (Just use an array if it isn't utf8...)
-    pub fn next_str(&mut self) -> Result<String> {
+    pub fn next_str(&mut self) -> Result<String, DispatchError> {
         let mut len = self.next_u32()? as usize;
         // Round up to the next aligned index
         if len & 0b11 != 0 {
             len = (len & !0b11) + 4;
         }
         if len > self.args.len() * std::mem::size_of::<u32>() {
-            Err(DispatchError::ExpectedArgument("string"))
+            Err(DispatchError::ExpectedArgument {
+                data_type: "string"
+            })
         } else {
             // Transmute to a &[u8], careful to update the length to be in the correct units and to keep the same lifetime
             let str: &'a [u8] = unsafe { std::slice::from_raw_parts(self.args.as_ptr() as *const u8, self.args.len() * std::mem::size_of::<u32>() / std::mem::size_of::<u8>()) };
             self.args = &self.args[len / std::mem::size_of::<u32>()..];
             // TODO: Should we trust the length? Are nulls in a &str potentially hazardous?
             let null_index = str[..len].iter().take_while(|&&b| b != 0).count(); // Too lenient
-            Ok(String::from_utf8_lossy(&str[..null_index]).to_string())
+            Ok(String::from_utf8(str[..null_index].to_vec())?)
         }
 
     }
     // TODO: Transmute to useful types with generic implementation. Can it be done safely?
     /// Interpret the next argument as a byte slice
     /// Similar to `next_str()` but can contain null bytes
-    pub fn next_array(&mut self) -> Result<&'a [u8]> {
+    pub fn next_array(&mut self) -> Result<&'a [u8], DispatchError> {
         let len = self.next_u32()? as usize;
         // Round up to the next aligned index
         let aligned_len = if len & 0b11 != 0 {
@@ -189,7 +200,9 @@ impl<'a> Args<'a> {
             len
         };
         if self.args.len() * std::mem::size_of::<u32>() < aligned_len {
-            Err(DispatchError::ExpectedArgument("array"))
+            Err(DispatchError::ExpectedArgument {
+                data_type: "array"
+            })
         } else {
             // TODO: Don't trust user input
             // Transmute to a &[u8], careful to update the length to be in the correct units and to keep the same lifetime
@@ -199,8 +212,10 @@ impl<'a> Args<'a> {
         }
     }
     /// Interpret the next argument as a new_id where the type is known through the protocol specification
-    pub fn next_new_id<S: Into<String>>(&mut self, interface: S, version: u32) -> Result<NewId> {
-        let id = self.next_u32().map_err(|_| DispatchError::ExpectedArgument("new_id id"))?;
+    pub fn next_new_id<S: Into<String>>(&mut self, interface: S, version: u32) -> Result<NewId, DispatchError> {
+        let id = self.next_u32().map_err(|_| DispatchError::ExpectedArgument {
+            data_type: "id of new_id"
+        })?;
         Ok(NewId {
             id,
             interface: interface.into(),
@@ -208,10 +223,10 @@ impl<'a> Args<'a> {
         })
     }
     /// Interpret the next argument as a new_id of which the type is unknown statically
-    pub fn next_dynamic_new_id(&mut self) -> Result<NewId> {
-        let interface = self.next_str().map_err(|_| DispatchError::ExpectedArgument("new_id interface"))?;
-        let version = self.next_u32().map_err(|_| DispatchError::ExpectedArgument("new_id version"))?;
-        let id = self.next_u32().map_err(|_| DispatchError::ExpectedArgument("new_id id"))?;
+    pub fn next_dynamic_new_id(&mut self) -> Result<NewId, DispatchError> {
+        let interface = self.next_str().map_err(|_| DispatchError::ExpectedArgument { data_type: "interface of new_id" })?;
+        let version = self.next_u32().map_err(|_| DispatchError::ExpectedArgument { data_type: "version of new_id" })?;
+        let id = self.next_u32().map_err(|_| DispatchError::ExpectedArgument { data_type: "id of new_id" })?;
         Ok(NewId {
             id,
             interface,

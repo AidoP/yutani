@@ -11,8 +11,8 @@ name = "error"
 summary = "Basic error type"
 description = "A type for reporting high-level errors"
 [[interface.enum.entry]]
-name = 'invalid_object'
-summary = "Object does not exist"
+name = 'generic'
+summary = "A generic error"
 value = 0
 
 [[interface.request]]
@@ -26,7 +26,7 @@ summary = 'file descriptor for reading'
 
 [[interface.event]]
 name = 'error'
-summary = 'Fatal error event'
+summary = 'Error event'
 description = "An error was reported"
 [[interface.event.arg]]
 name = 'object_id'
