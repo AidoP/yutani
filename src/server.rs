@@ -184,6 +184,8 @@ impl Client {
 #[repr(C)]
 pub struct LeaseBox<T: ?Sized> {
     leased: bool,
+    interface: &'static str,
+    version: u32,
     dispatch: fn(Lease<dyn Any>, &mut Client, Message) -> Result<()>,
     value: T
 }
@@ -197,7 +199,7 @@ pub struct Resident<T: ?Sized> {
 impl<T: Dispatch> Resident<T> {
     fn new(value: T) -> Self {
         Self {
-            ptr: Box::leak(box LeaseBox { leased: false, dispatch: T::dispatch, value })
+            ptr: Box::leak(box LeaseBox { leased: false, interface: T::INTERFACE, version: T::VERSION, dispatch: T::dispatch, value })
         }
     }
 }
@@ -252,7 +254,7 @@ impl<T: Dispatch> Lease<T> {
     /// Creates a lease that will never have a corresponding resident
     fn temporary(id: u32, value: T) -> Self {
         Self {
-            ptr: Box::leak(box LeaseBox { leased: false, dispatch: T::dispatch, value }),
+            ptr: Box::leak(box LeaseBox { leased: false, interface: T::INTERFACE, version: T::VERSION, dispatch: T::dispatch, value }),
             id
         }
     }
@@ -274,6 +276,12 @@ impl Lease<dyn Any> {
         unsafe {
             ((*self.ptr).dispatch)(self, client, message)
         }
+    }
+    pub fn interface(&self) -> &'static str {
+        unsafe { (*self.ptr).interface }
+    }
+    pub fn version(&self) -> u32 {
+        unsafe { (*self.ptr).version }
     }
 }
 impl<T: ?Sized> Deref for Lease<T> {
