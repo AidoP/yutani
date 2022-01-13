@@ -98,15 +98,6 @@ impl Client {
     pub fn send(&mut self, message: Message) -> Result<()> {
         Ok(message.send(&mut self.stream)?)
     }
-    /* TODO: Allow the user to specify an error reporting function
-    /// Send a global error event to the client
-    pub fn error(&mut self, object: u32, error: u32, msg: &str) {
-        let mut message = Message::new(1, 0);
-        message.push_u32(object as _);
-        message.push_u32(error as _);
-        message.push_str(msg);
-        message.send(&mut self.stream).unwrap();
-    }*/
     /// Get the next available file descriptor from the queue
     pub fn next_fd(&mut self) -> std::result::Result<Fd, DispatchError> {
         self.fds.pop_front().ok_or(DispatchError::ExpectedArgument { data_type: "fd" })
@@ -137,7 +128,7 @@ impl Client {
         } else {
             let object = Resident::new(object);
             let lease = object.lease(id)?;
-            self.objects.insert(id, object);
+            self.objects.insert(id, object.to_any());
             //Dispatch::init(&mut lease, self)?;
             Ok(lease)
         }
@@ -198,52 +189,48 @@ impl Client {
 }
 
 #[repr(C)]
-pub struct LeaseBox<T: ?Sized> {
+struct LeaseBox<T: ?Sized> {
+    // TODO: though it can only be used on one thread, out-of-order execution could cause the lease flag to be out-of-date
     leased: bool,
     interface: &'static str,
     version: u32,
     dispatch: fn(Lease<dyn Any>, &mut Client, Message) -> Result<()>,
     value: T
 }
-
-// TODO: Can trait object coersion be implemented in stable?
-impl<T: ?Sized + std::marker::Unsize<U>, U: ?Sized> std::ops::CoerceUnsized<Resident<U>> for Resident<T> {}
-impl<T: ?Sized + std::marker::Unsize<U>, U: ?Sized> std::ops::DispatchFromDyn<Resident<U>> for Resident<T> {}
-pub struct Resident<T: ?Sized> {
+/// `Resident` and `Lease` are asymmetric shared pointers
+/// 
+/// While `Lease` exists temporarily and allows access to the inner type, T, `Resident` exists only to create new `Lease`s and prevent the backing storage from dropping.
+/// Single-bit reference counting ensures only 1 `Lease` is ever created at a time. This allows a mutable borrow to instead claim ownership briefly so that the `Client`
+/// can be mutably borrowed by a Lease that it indirectly owns.
+/// 
+/// Inspired by `Option::take` which allows the same system without the automatic return of ownership.
+struct Resident<T: ?Sized> {
     ptr: *mut LeaseBox<T>
 }
 impl<T: Dispatch> Resident<T> {
     fn new(value: T) -> Self {
         Self {
-            ptr: Box::leak(box LeaseBox { leased: false, interface: T::INTERFACE, version: T::VERSION, dispatch: T::dispatch, value })
+            ptr: Box::leak(Box::new(LeaseBox { leased: false, interface: T::INTERFACE, version: T::VERSION, dispatch: T::dispatch, value }))
         }
     }
 }
+impl<T: 'static + Any> Resident<T> {
+    fn to_any(self) -> Resident<dyn Any> {
+        let this: Resident<dyn Any> = Resident {
+            ptr: self.ptr
+        };
+        std::mem::forget(self);
+        this
+    }
+}
 impl<T: ?Sized> Resident<T> {
-    pub fn as_ref(&self) -> Option<&T> {
-        unsafe {
-            if (*self.ptr).leased {
-                None
-            } else {
-                Some(&(*self.ptr).value)
-            }
-        }
-    }
-    pub fn as_mut(&mut self) -> Option<&mut T> {
-        unsafe {
-            if (*self.ptr).leased {
-                None
-            } else {
-                Some(&mut (*self.ptr).value)
-            }
-        }
-    }
     fn lease(&self, id: u32) -> Result<Lease<T>> {
         unsafe {
             if (*self.ptr).leased {
                 Err(SystemError::ObjectLeased(id).into())
             } else {
                 (*self.ptr).leased = true;
+
                 Ok(Lease { ptr: self.ptr, id })
             }
         }
@@ -261,7 +248,7 @@ impl<T: ?Sized> Drop for Resident<T> {
     }
 }
 
-/// Allows the creation of messages by a leased object without leaking the object id
+/// A temporary claim of ownership of an object. Ownership will be returned implicitly to the corresponding `Resident` on drop.
 pub struct Lease<T: ?Sized> {
     ptr: *mut LeaseBox<T>,
     id: u32
@@ -270,7 +257,7 @@ impl<T: Dispatch> Lease<T> {
     /// Creates a lease that will never have a corresponding resident
     fn temporary(id: u32, value: T) -> Self {
         Self {
-            ptr: Box::leak(box LeaseBox { leased: false, interface: T::INTERFACE, version: T::VERSION, dispatch: T::dispatch, value }),
+            ptr: Box::leak(Box::new(LeaseBox { leased: false, interface: T::INTERFACE, version: T::VERSION, dispatch: T::dispatch, value })),
             id
         }
     }

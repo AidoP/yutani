@@ -1,10 +1,3 @@
-#![feature(maybe_uninit_uninit_array, maybe_uninit_array_assume_init)]
-#![feature(io_error_more)]
-#![feature(box_syntax)]
-#![feature(result_flattening)]
-#![feature(unsize)]
-#![feature(coerce_unsized)]
-#![feature(dispatch_from_dyn)]
 use std::{fmt, io};
 
 pub mod server;
@@ -238,13 +231,13 @@ impl RingBuffer {
         }
     }
     /// Copy `COUNT` bytes out of the array
+    /// 
     /// Returns None if there is not enough data available to fill the array
     pub fn copy<const COUNT: usize>(&self) -> Option<[u8; COUNT]> {
-        use std::mem::MaybeUninit;
-        let mut buffer: [_; COUNT] = MaybeUninit::uninit_array();
+        let mut buffer = [0; COUNT];
         unsafe {
-            if self.copy_into_raw(buffer.as_mut_ptr() as *mut u8, COUNT) {
-                Some(MaybeUninit::array_assume_init(buffer))
+            if self.copy_into_raw(buffer.as_mut_ptr(), COUNT) {
+                Some(buffer)
             } else {
                 None
             }
@@ -261,6 +254,7 @@ impl RingBuffer {
         }
     }
     /// Fills the slice with the next bytes from the buffer
+    /// 
     /// Returns None and leaves the slice as-is if the buffer does not contain enough data to fill the slice
     #[inline]
     pub fn copy_into(&self, slice: &mut [u8]) -> bool {
@@ -271,6 +265,7 @@ impl RingBuffer {
         unsafe { self.take_into_raw(slice.as_mut_ptr(), slice.len()) }
     }
     /// Fills the slice with the next bytes from the buffer
+    /// 
     /// Returns None and leaves the slice as-is if the buffer does not contain enough data to fill the slice
     pub unsafe fn copy_into_raw(&self, dst: *mut u8, count: usize) -> bool {
         if count > self.len() {
