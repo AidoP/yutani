@@ -7,6 +7,11 @@ use crate::common::*;
 #[repr(transparent)]
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct Fixed(pub i32);
+impl Fixed {
+    fn into_f32(self) -> f32 {
+        todo!()
+    }
+}
 impl From<i32> for Fixed {
     fn from(int: i32) -> Self {
         Self(int * 256)
@@ -14,27 +19,32 @@ impl From<i32> for Fixed {
 }
 impl From<f32> for Fixed {
     fn from(_: f32) -> Self {
-        unimplemented!(/* Is f32 guaranteed to be an IEEE 754 single precision */)
+        todo!(/* Is f32 guaranteed to be an IEEE 754 single precision */)
     }
 }
 impl From<f64> for Fixed {
     fn from(_: f64) -> Self {
-        unimplemented!(/* Is f64 guaranteed to be an IEEE 754 double precision */)
+        todo!(/* Is f64 guaranteed to be an IEEE 754 double precision */)
     }
 }
-impl Into<f32> for Fixed {
-    fn into(self) -> f32 {
-        unimplemented!(/* Is f32 guaranteed to be an IEEE 754 single precision */)
+impl From<Fixed> for f32 {
+    fn from(f: Fixed) -> f32 {
+        todo!(/* Is f32 guaranteed to be an IEEE 754 single precision */)
     }
 }
 impl Into<f64> for Fixed {
     fn into(self) -> f64 {
-        unimplemented!(/* Is f64 guaranteed to be an IEEE 754 double precision */)
+        todo!(/* Is f64 guaranteed to be an IEEE 754 double precision */)
     }
 }
 impl Into<i32> for Fixed {
     fn into(self) -> i32 {
         self.0 / 256
+    }
+}
+impl Display for Fixed {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.into_f32())
     }
 }
 

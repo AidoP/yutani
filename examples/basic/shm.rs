@@ -5,7 +5,7 @@ use crate::{Global, wayland};
 
 pub struct WlShm;
 impl Global for WlShm {
-    const UID: u32 = 0;
+    const UID: u32 = 1;
 }
 impl wayland::WlShm for Lease<WlShm> {
     fn create_pool(&mut self, client: &mut Client, id: NewId, file: File, size: i32) -> Result<()> {
