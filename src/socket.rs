@@ -15,7 +15,7 @@ fn prepare_socket<P: AsRef<Path>, F: Fn(i32, *const sockaddr, u32) -> std::io::R
             sun_path: [0; 108]
         };
         if path.len() > std::mem::size_of_val(&address.sun_path) {
-            Err(std::io::Error::new(std::io::ErrorKind::FilenameTooLong, "Socket address path is too long"))
+            Err(std::io::Error::new(std::io::ErrorKind::Other, "Socket address path is too long"))
         } else {
             std::ptr::copy_nonoverlapping(path.as_ptr() as *const i8, address.sun_path.as_mut_ptr(), path.len());
             f(socket, &address as *const _ as _, std::mem::size_of::<sockaddr_un>() as _)

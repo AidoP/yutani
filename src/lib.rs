@@ -1,4 +1,3 @@
-#![feature(io_error_more)]
 use std::{fmt, io};
 
 pub mod server;
