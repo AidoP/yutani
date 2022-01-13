@@ -1,10 +1,3 @@
-#![feature(maybe_uninit_uninit_array, maybe_uninit_array_assume_init)]
-#![feature(io_error_more)]
-#![feature(box_syntax)]
-#![feature(result_flattening)]
-#![feature(unsize)]
-#![feature(coerce_unsized)]
-#![feature(dispatch_from_dyn)]
 use std::{fmt, io};
 
 pub mod server;
@@ -23,9 +16,9 @@ mod common {
     pub use crate::{
         types::*,
         socket::*,
+        SystemError,
         DispatchError,
         message::Message,
-        Result,
         RingBuffer,
         Object
     };
@@ -57,41 +50,105 @@ impl Object for u32 {
     }
 }
 
-pub type Result<T> = std::result::Result<T, DispatchError>;
-#[derive(Debug)]
-pub enum DispatchError {
-    IOError(io::Error),
-    BufferEmpty,
-    ObjectNull,
+pub enum SystemError {
+    /// Logically, a double lease can only occur if the library or consuming code has a logic error.
+    /// Termination would be suitable as this indicates corrupt state.
     ObjectLeased(u32),
+    /// The message buffer is corrupted
+    CorruptMessage,
+    /// A dispatch error was encountered but no dispatch error handler was available
+    NoDispatchHandler(DispatchError),
+    IoError(io::Error),
+}
+impl fmt::Display for SystemError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::ObjectLeased(object) => write!(f, "Attempted to lease object \"{}\" more than once", object),
+            Self::CorruptMessage => write!(f, "Raw message data is corrupt or invalid"),
+            Self::NoDispatchHandler(error) => write!(f, "Dispatch error unhandled as an error handler was not registered: {}", error),
+            Self::IoError(error) => write!(f, "{}", error)
+        }
+    }
+}
+impl fmt::Debug for SystemError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+impl From<io::Error> for SystemError {
+    fn from(error: io::Error) -> Self {
+        SystemError::IoError(error)
+    }
+}
+
+pub enum DispatchError {
+    ObjectNull,
     ObjectExists(u32),
     ObjectNotFound(u32),
-    EnumVariantInvalid(&'static str, u32),
-    InvalidOpcode(u32, u16, &'static str),
-    InvalidObject(&'static str, &'static str),
-    ExpectedArgument(&'static str),
-    Utf8Error(std::str::Utf8Error, &'static str)
+    NoVariant {
+        name: &'static str,
+        variant: u32
+    },
+    InvalidRequest {
+        opcode: u16,
+        object: u32,
+        interface: &'static str
+    },
+    InvalidEvent {
+        opcode: u16,
+        object: u32,
+        interface: &'static str
+    },
+    UnexpectedObjectType {
+        object: u32,
+        expected_interface: &'static str,
+        had_interface: &'static str
+    },
+    ExpectedArgument {
+        data_type: &'static str
+    },
+    Utf8Error(std::string::FromUtf8Error)
 }
 impl fmt::Display for DispatchError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DispatchError::IOError(e) => write!(f, "{}", e),
-            DispatchError::BufferEmpty => write!(f, "Buffer is empty"),
             DispatchError::ObjectNull => write!(f, "Null object accessed"),
-            DispatchError::ObjectLeased(object_id) => write!(f, "Object {} already in use", object_id),
-            DispatchError::ObjectExists(object_id) => write!(f, "Cannot create object {} as it already exists", object_id),
-            DispatchError::ObjectNotFound(object_id) => write!(f, "Object {} does not exist", object_id),
-            DispatchError::EnumVariantInvalid(enum_name, variant) => write!(f, "Enum {:?} has no variant \"{}\"", enum_name, variant),
-            DispatchError::InvalidOpcode(object_id, opcode, interface) => write!(f, "Opcode {} is invalid for object {} implementing interface `{}`", opcode, object_id, interface),
-            DispatchError::InvalidObject(expected, got) => write!(f, "Expected object of interface `{}` but instead got `{}`", expected, got),
-            DispatchError::ExpectedArgument(argument) => write!(f, "Expected argument of type {}", argument),
-            DispatchError::Utf8Error(error, reason) => write!(f, "{} is not a UTF-8 string: {:?}", reason, error)
+            DispatchError::ObjectExists(object) => write!(f, "Object {} already exists", object),
+            DispatchError::ObjectNotFound(object) => write!(f, "Object {} does not exist", object),
+            DispatchError::NoVariant {
+                name,
+                variant
+            } => write!(f, "Enum {:?} has no variant \"{}\"", name, variant),
+            DispatchError::InvalidRequest {
+                opcode,
+                object,
+                interface
+            } => write!(f, "{}@{} has no request with opcode {}", interface, object, opcode),
+            DispatchError::InvalidEvent {
+                opcode,
+                object,
+                interface
+            } => write!(f, "{}@{} has no event with opcode {}", interface, object, opcode),
+            DispatchError::UnexpectedObjectType {
+                object,
+                expected_interface,
+                had_interface
+            } => write!(f, "Expected object {} to implement {:?}, but it implements {:?}", object, expected_interface, had_interface),
+            DispatchError::ExpectedArgument {
+                data_type
+            } => write!(f, "Expected argument of type {:?}", data_type),
+            DispatchError::Utf8Error(reason) => write!(f, "Strings must be valid UTF-8. {:?}", reason)
         }
     }
 }
-impl From<io::Error> for DispatchError {
-    fn from(error: io::Error) -> Self {
-        DispatchError::IOError(error)
+impl fmt::Debug for DispatchError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(self, f)
+    }
+}
+impl From<std::string::FromUtf8Error> for DispatchError {
+    fn from(error: std::string::FromUtf8Error) -> Self {
+        DispatchError::Utf8Error(error)
     }
 }
 
@@ -174,39 +231,45 @@ impl RingBuffer {
         }
     }
     /// Copy `COUNT` bytes out of the array
+    /// 
     /// Returns None if there is not enough data available to fill the array
-    pub fn copy<const COUNT: usize>(&self) -> Result<[u8; COUNT]> {
-        use std::mem::MaybeUninit;
-        let mut buffer: [_; COUNT] = MaybeUninit::uninit_array();
+    pub fn copy<const COUNT: usize>(&self) -> Option<[u8; COUNT]> {
+        let mut buffer = [0; COUNT];
         unsafe {
-            self.copy_into_raw(buffer.as_mut_ptr() as *mut u8, COUNT)
-            .map(|_| MaybeUninit::array_assume_init(buffer))
+            if self.copy_into_raw(buffer.as_mut_ptr(), COUNT) {
+                Some(buffer)
+            } else {
+                None
+            }
         }
     }
     /// Copy `COUNT` bytes out of the array and advance the reader
     #[inline]
-    pub fn take<const COUNT: usize>(&mut self) -> Result<[u8; COUNT]> {
-        let a = self.copy()?;
-        self.add_reader(COUNT);
-        Ok(a)
+    pub fn take<const COUNT: usize>(&mut self) -> Option<[u8; COUNT]> {
+        if let Some(buffer) = self.copy() {
+            self.add_reader(COUNT);
+            Some(buffer)
+        } else {
+            None
+        }
     }
     /// Fills the slice with the next bytes from the buffer
+    /// 
     /// Returns None and leaves the slice as-is if the buffer does not contain enough data to fill the slice
     #[inline]
-    pub fn copy_into(&self, slice: &mut [u8]) -> Result<()> {
+    pub fn copy_into(&self, slice: &mut [u8]) -> bool {
         unsafe { self.copy_into_raw(slice.as_mut_ptr(), slice.len()) }
     }
     #[inline]
-    pub fn take_into(&mut self, slice: &mut [u8]) -> Result<()> {
-        self.copy_into(slice)?;
-        self.add_reader(slice.len());
-        Ok(())
+    pub fn take_into(&mut self, slice: &mut [u8]) -> bool {
+        unsafe { self.take_into_raw(slice.as_mut_ptr(), slice.len()) }
     }
     /// Fills the slice with the next bytes from the buffer
+    /// 
     /// Returns None and leaves the slice as-is if the buffer does not contain enough data to fill the slice
-    pub unsafe fn copy_into_raw(&self, dst: *mut u8, count: usize) -> Result<()> {
+    pub unsafe fn copy_into_raw(&self, dst: *mut u8, count: usize) -> bool {
         if count > self.len() {
-            Err(DispatchError::BufferEmpty)
+            false
         } else {
             let src = self.buffer.as_ptr();
             if self.reader + count <= Self::SIZE {
@@ -216,14 +279,17 @@ impl RingBuffer {
                 dst.copy_from_nonoverlapping(src.add(self.reader), size);
                 dst.add(size).copy_from_nonoverlapping(src, count - size);
             }
-            Ok(())
+            true
         }
     }
     #[inline]
-    pub unsafe fn take_into_raw(&mut self, dst: *mut u8, count: usize) -> Result<()> {
-        self.copy_into_raw(dst, count)?;
-        self.add_reader(count);
-        Ok(())
+    pub unsafe fn take_into_raw(&mut self, dst: *mut u8, count: usize) -> bool {
+        if self.copy_into_raw(dst, count) {
+            self.add_reader(count);
+            true
+        } else {
+            false
+        }
     }
     /// Get the reader location
     pub fn reader(&self) -> usize {

@@ -1,9 +1,26 @@
-use std::{any::Any, rc::Rc};
-use wl::{server::prelude::*, Result, DispatchError};
+use wl::server::prelude::*;
 
 fn main() {
     let server = wl::Server::bind().unwrap();
-    server.start::<WlDisplay>()
+    server.start::<WlDisplay, DisplayErrorHandler>()
+}
+
+#[derive(Default)]
+struct DisplayErrorHandler;
+impl DispatchErrorHandler for DisplayErrorHandler {
+    fn handle(&mut self, client: &mut Client, error: wl::DispatchError) -> Result<()> {
+        match error {
+            wl::DispatchError::ObjectNull => todo!(),
+            wl::DispatchError::ObjectExists(_) => todo!(),
+            wl::DispatchError::ObjectNotFound(_) => todo!(),
+            wl::DispatchError::NoVariant { name, variant } => todo!(),
+            wl::DispatchError::InvalidRequest { opcode, object, interface } => todo!(),
+            wl::DispatchError::InvalidEvent { opcode, object, interface } => todo!(),
+            wl::DispatchError::UnexpectedObjectType { object, expected_interface, had_interface } => todo!(),
+            wl::DispatchError::ExpectedArgument { data_type } => todo!(),
+            wl::DispatchError::Utf8Error(_) => todo!(),
+        }
+    }
 }
 
 trait Global {

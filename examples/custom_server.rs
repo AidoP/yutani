@@ -1,9 +1,22 @@
 use std::{fs::File, io::Read, os::unix::prelude::FromRawFd};
-use wl::{server::prelude::*, Result};
+use wl::server::prelude::*;
 
 fn main() {
     let server = wl::Server::bind().unwrap();
-    server.start::<CInit>()
+    server.start::<CInit, ErrorHandler>()
+}
+
+#[derive(Default)]
+struct ErrorHandler;
+impl DispatchErrorHandler for ErrorHandler {
+    fn handle(&mut self, client: &mut Client, error: wl::DispatchError) -> Result<()> {
+        let mut lease: Lease<CInit> = client.get(Client::DISPLAY)?;
+        let message = format!("{}", error);
+        {
+            use custom::CInit;
+            lease.error(client, &lease.object(), custom::CInitError::GENERIC, &message)
+        }
+    }
 }
 
 #[protocol("protocol/custom.toml")]
