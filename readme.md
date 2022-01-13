@@ -18,7 +18,7 @@ This is **not** a Rust binding for libwayland, rather, this crate is a standalon
 - Converting XML specifications to TOML ahead of time is trivial.
 - I just do not want to use XML.
 
-Wayland Protocols converted to TOML are available under [wl-protocols](https://github.com/AidoP/wl-protocols). The default search path for protocol specifications is `protocol/` and can be overriden by setting the `WL_PROTOCOLS` environment variable.
+Wayland Protocols converted to TOML are available under [wl-protocols](https://github.com/AidoP/wl-protocols).
 
 # Example Usage
 A minimal example implementing the core of the wayland protocol is available at [`examples/basic/`](https://github.com/AidoP/wl/tree/main/examples/basic).
