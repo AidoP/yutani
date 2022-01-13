@@ -123,7 +123,7 @@ impl Message {
         }
     }
     /// Push a file to the list of arguments
-    pub fn push_file(&mut self, fd: Fd) {
+    pub fn push_fd(&mut self, fd: Fd) {
         self.fds.push(fd)
     }
     /// Push a u32 to the list of arguments
