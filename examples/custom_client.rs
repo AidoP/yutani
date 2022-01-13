@@ -5,6 +5,6 @@ fn main() {
     let mut stream = wl::socket::UnixStream::connect("/run/user/1000/wayland-0")
         .unwrap();
     let mut message = wl::Message::new(1, 0);
-    message.push_file(wl::Fd::new(file.as_raw_fd()));
+    message.push_file(&file);
     message.send(&mut stream).unwrap();
 }

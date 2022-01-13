@@ -1,6 +1,6 @@
 use std::{
     collections::{HashMap, VecDeque},
-    fs,
+    fs::{self, File},
     io,
     ops::{Deref, DerefMut}, any::Any, fmt::{self, Display}
 };
@@ -77,7 +77,7 @@ pub struct Client {
     stream: UnixStream,
     messages: RingBuffer,
     // TODO: Consider limiting. As is, a client can send FD's until the server is starved, causing a DoS
-    fds: VecDeque<Fd>,
+    fds: VecDeque<File>,
     objects: HashMap<u32, Resident<dyn Any>>,
     error_handler: Option<Box<dyn DispatchErrorHandler>>,
     /// A counter for generating unique ID's
@@ -99,7 +99,7 @@ impl Client {
         Ok(message.send(&mut self.stream)?)
     }
     /// Get the next available file descriptor from the queue
-    pub fn next_fd(&mut self) -> std::result::Result<Fd, DispatchError> {
+    pub fn next_file(&mut self) -> std::result::Result<File, DispatchError> {
         self.fds.pop_front().ok_or(DispatchError::ExpectedArgument { data_type: "fd" })
     }
     /// The id of the Display object

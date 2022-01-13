@@ -27,9 +27,8 @@ mod custom {
 #[derive(Default)]
 pub struct CInit;
 impl custom::CInit for Lease<CInit> {
-    fn read(&mut self, _: &mut Client, fd: Fd) -> Result<()> {
+    fn read(&mut self, _: &mut Client, mut file: File) -> Result<()> {
         let mut string = String::new();
-        let mut file = unsafe { File::from_raw_fd(fd.into()) };
         if let Err(e) = file.read_to_string(&mut string) {
             eprintln!("Failed to read file: {}", e);
         }

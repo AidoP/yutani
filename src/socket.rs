@@ -1,6 +1,6 @@
-use std::{path::Path, os::unix::prelude::{OsStrExt}, collections::VecDeque};
+use std::{path::Path, os::unix::prelude::{OsStrExt, FromRawFd}, collections::VecDeque, fs::File};
 use libc::*;
-use crate::{RingBuffer, Fd};
+use crate::RingBuffer;
 
 fn prepare_socket<P: AsRef<Path>, F: Fn(i32, *const sockaddr, u32) -> std::io::Result<T>, T>(path: P, f: F) -> std::io::Result<T> {
     let path = path.as_ref().as_os_str().as_bytes();
@@ -79,7 +79,7 @@ impl UnixStream {
     }
     /// Receive a message from the socket alongside ancillary data
     /// All file descriptors must be appropriately closed
-    pub fn recvmsg(&mut self, buffer: &mut RingBuffer, fds: &mut VecDeque<Fd>) -> std::io::Result<bool> {
+    pub fn recvmsg(&mut self, buffer: &mut RingBuffer, fds: &mut VecDeque<File>) -> std::io::Result<bool> {
         use std::ptr::null_mut;
         use std::mem::size_of;
         let mut did_read = false;
@@ -112,7 +112,7 @@ impl UnixStream {
                                 let count = ((*cmsgp).cmsg_len - CMSG_LEN(0) as usize) / size_of::<i32>();
                                 let data = std::slice::from_raw_parts_mut(CMSG_DATA(cmsgp) as _, count);
                                 for fd in data {
-                                    fds.push_back(Fd::new(*fd))
+                                    fds.push_back(File::from_raw_fd(*fd))
                                 }
                             }
                             cmsgp = CMSG_NXTHDR(&msg, cmsgp);
@@ -128,7 +128,7 @@ impl UnixStream {
         }
     }
     /// Send a message from the socket alongside ancillary data
-    pub fn sendmsg(&mut self, iov: &mut [IoVec], fds: &[Fd]) -> std::io::Result<()> {
+    pub fn sendmsg(&mut self, iov: &mut [IoVec], fds: &[i32]) -> std::io::Result<()> {
         use std::ptr::null_mut;
         use std::mem::size_of;
         let mut msg = msghdr {
@@ -149,8 +149,7 @@ impl UnixStream {
             (*cmsgp).cmsg_len = CMSG_LEN((size_of::<i32>() * fds.len()) as _) as _;
             let mut dst = CMSG_DATA(cmsgp) as *mut i32;
             for fd in fds {
-                let fd = **fd;
-                *dst = fd;
+                *dst = *fd;
                 dst = dst.add(1)
             }
             if sendmsg(self.socket, &msg, MSG_NOSIGNAL) < 0 {

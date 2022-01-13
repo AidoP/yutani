@@ -1,4 +1,4 @@
-use std::rc::Rc;
+use std::{rc::Rc, fs::File, os::unix::prelude::AsRawFd};
 
 use wl::server::prelude::*;
 use crate::{Global, wayland};
@@ -8,8 +8,8 @@ impl Global for WlShm {
     const UID: u32 = 0;
 }
 impl wayland::WlShm for Lease<WlShm> {
-    fn create_pool(&mut self, client: &mut Client, id: NewId, fd: Fd, size: i32) -> Result<()> {
-        client.insert(id, WlShmPool::new(fd, size)?)?;
+    fn create_pool(&mut self, client: &mut Client, id: NewId, file: File, size: i32) -> Result<()> {
+        client.insert(id, WlShmPool::new(file, size)?)?;
         Ok(())
     }
 }
@@ -17,10 +17,10 @@ impl wayland::WlShm for Lease<WlShm> {
 struct ShmMapping {
     memory: *mut u8,
     size: usize,
-    fd: Fd
+    file: File
 }
 impl ShmMapping {
-    fn new(fd: Fd, size: i32) -> Result<Self> {
+    fn new(file: File, size: i32) -> Result<Self> {
         use libc::*;
         if size <= 0 {
             todo!()
@@ -28,14 +28,14 @@ impl ShmMapping {
         let size = size as usize;
         let protection = PROT_READ | PROT_WRITE;
         let flags = MAP_SHARED;
-        let memory = unsafe { mmap(std::ptr::null_mut(), size, protection, flags, *fd, 0) };
+        let memory = unsafe { mmap(std::ptr::null_mut(), size, protection, flags, file.as_raw_fd(), 0) };
         if memory == libc::MAP_FAILED {
             todo!()
         }
         Ok(Self {
             memory: memory as *mut u8,
             size,
-            fd
+            file
         })
     }
 }
@@ -44,7 +44,7 @@ impl Drop for ShmMapping {
         use libc::*;
         unsafe {
             munmap(self.memory as _, self.size);
-            close(*self.fd);
+            close(self.file.as_raw_fd());
         }
     }
 }
@@ -53,9 +53,9 @@ pub struct WlShmPool {
     mapping: Rc<ShmMapping>
 }
 impl WlShmPool {
-    fn new(fd: Fd, size: i32) -> Result<Self> {
+    fn new(file: File, size: i32) -> Result<Self> {
         Ok(Self {
-            mapping: Rc::new(ShmMapping::new(fd, size)?)
+            mapping: Rc::new(ShmMapping::new(file, size)?)
         })
     }
 }

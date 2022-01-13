@@ -79,35 +79,6 @@ impl Object for NewId {
     }
 }
 
-#[derive(Debug)]
-pub struct Fd(i32);
-impl Fd {
-    pub fn new(fd: i32) -> Self {
-        Self(fd)
-    }
-}
-impl From<i32> for Fd {
-    fn from(fd: i32) -> Self {
-        Self(fd)
-    }
-}
-impl Into<i32> for Fd {
-    fn into(self) -> i32 {
-        self.0
-    }
-}
-impl Deref for Fd {
-    type Target = i32;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-impl Display for Fd {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "fd {}", self.0)
-    }
-}
-
 #[repr(transparent)]
 pub struct Array(pub Vec<u8>);
 impl Deref for Array {

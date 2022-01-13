@@ -1,3 +1,5 @@
+use std::{os::unix::prelude::AsRawFd, fs::File};
+
 use crate::common::*;
 
 /// A message over the wire
@@ -13,7 +15,7 @@ pub struct Message {
     /// The untyped arguments to pass to the callee
     pub args: Vec<u32>,
     /// The file descriptor arguments
-    pub fds: Vec<Fd>
+    pub fds: Vec<i32>
 }
 impl Message {
     /// Create a new message with no arguments
@@ -123,8 +125,8 @@ impl Message {
         }
     }
     /// Push a file to the list of arguments
-    pub fn push_file(&mut self, fd: Fd) {
-        self.fds.push(fd)
+    pub fn push_file(&mut self, file: &File) {
+        self.fds.push(file.as_raw_fd())
     }
     /// Push a u32 to the list of arguments
     pub fn push_new_id(&mut self, id: NewId) {

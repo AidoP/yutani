@@ -4,7 +4,7 @@ pub mod server;
 pub use server::Server;
 
 mod types;
-pub use types::{Fixed, NewId, Fd, Array};
+pub use types::{Fixed, NewId, Array};
 
 mod message;
 pub use message::Message;
