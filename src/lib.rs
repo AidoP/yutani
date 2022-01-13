@@ -1,10 +1,5 @@
 #![feature(maybe_uninit_uninit_array, maybe_uninit_array_assume_init)]
 #![feature(io_error_more)]
-#![feature(box_syntax)]
-#![feature(result_flattening)]
-#![feature(unsize)]
-#![feature(coerce_unsized)]
-#![feature(dispatch_from_dyn)]
 use std::{fmt, io};
 
 pub mod server;
