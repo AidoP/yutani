@@ -45,7 +45,7 @@ impl Server {
     }
     pub fn start<T: 'static + Dispatch + Default, E: 'static + DispatchErrorHandler + Default>(self) -> ! {
         for stream in self.0 {
-            //std::thread::spawn(|| {
+            std::thread::spawn(|| {
                 let mut client = Client {
                     stream,
                     messages: Default::default(),
@@ -66,7 +66,7 @@ impl Server {
                         }
                     }
                 }
-            //});
+            });
         }
         unreachable!()
     }
@@ -90,7 +90,7 @@ pub struct Client {
 impl Client {
     /// Collect any new messages and execute them, then signal all ready events
     pub fn dispatch(&mut self) -> Result<()> {
-        if self.stream.recvmsg(&mut self.messages, &mut self.fds)? {
+        if self.stream.poll() && self.stream.recvmsg(&mut self.messages, &mut self.fds)? {
             while Message::available(&self.messages) {
                 let message = Message::read(&mut self.messages)?;
                 self.get_any(message.object)?.dispatch(self, message)?;

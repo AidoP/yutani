@@ -74,8 +74,15 @@ impl UnixStream {
             }
         })
     }
-    pub fn poll(&self) {
-
+    /// Indicate that the socket has more data available to read
+    pub fn poll(&self) -> bool {
+        let mut fds = pollfd {
+            fd: self.socket,
+            events: POLLIN,
+            revents: 0
+        };
+        // TODO: handle errors, namely EINTR
+        (unsafe { poll(&mut fds, 1, 0) } > 0) && (fds.revents & POLLIN) != 0
     }
     /// Receive a message from the socket alongside ancillary data
     /// All file descriptors must be appropriately closed
