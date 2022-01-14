@@ -29,21 +29,10 @@ pub mod prelude {
 pub struct Server(UnixListener);
 impl Server {
     pub fn bind() -> io::Result<Self> {
-        let path = &get_socket_path();
-        if let Ok(listener) = UnixListener::bind(path) {
-            Ok(Self(listener))
-        } else {
-            // Ensure the UnixStream is dropped
-            let is_err = { UnixStream::connect(path).is_err() };
-            if is_err {
-                fs::remove_file(path)?;
-                UnixListener::bind(path).map(|listener| Self(listener))
-            } else {
-                Err(io::ErrorKind::AddrInUse.into())
-            }
-        }
+        UnixListener::bind(get_socket_path(false)?)
+            .map(|listener| Self(listener))
     }
-    pub fn start<T: 'static + Dispatch + Default, E: 'static + DispatchErrorHandler + Default>(self) -> ! {
+    pub fn start<T: 'static + Dispatch + Default, E: 'static + DispatchErrorHandler + Default>(self) {
         for stream in self.0 {
             std::thread::spawn(|| {
                 let mut client = Client {
@@ -68,7 +57,6 @@ impl Server {
                 }
             });
         }
-        unreachable!()
     }
 }
 

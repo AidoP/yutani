@@ -176,7 +176,7 @@ impl<'a> Args<'a> {
         if len & 0b11 != 0 {
             len = (len & !0b11) + 4;
         }
-        if len > self.args.len() * std::mem::size_of::<u32>() {
+        if len >= self.args.len() * std::mem::size_of::<u32>() {
             Err(DispatchError::ExpectedArgument {
                 data_type: "string"
             })
@@ -184,8 +184,7 @@ impl<'a> Args<'a> {
             // Transmute to a &[u8], careful to update the length to be in the correct units and to keep the same lifetime
             let str: &'a [u8] = unsafe { std::slice::from_raw_parts(self.args.as_ptr() as *const u8, self.args.len() * std::mem::size_of::<u32>() / std::mem::size_of::<u8>()) };
             self.args = &self.args[len / std::mem::size_of::<u32>()..];
-            // TODO: Should we trust the length? Are nulls in a &str potentially hazardous?
-            let null_index = str[..len].iter().take_while(|&&b| b != 0).count(); // Too lenient
+            let null_index = str.iter().enumerate().find_map(|(index, &byte)| if byte == 0 { Some(index) } else { None }).unwrap_or(len);
             Ok(String::from_utf8(str[..null_index].to_vec())?)
         }
 
@@ -206,7 +205,6 @@ impl<'a> Args<'a> {
                 data_type: "array"
             })
         } else {
-            // TODO: Don't trust user input
             // Transmute to a &[u8], careful to update the length to be in the correct units and to keep the same lifetime
             let array: &'a [u8] = unsafe { std::slice::from_raw_parts(self.args.as_ptr() as *const u8, len) };
             self.args = &self.args[aligned_len / std::mem::size_of::<u32>()..];

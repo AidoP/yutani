@@ -13,6 +13,7 @@ pub mod socket;
 
 mod common {
     use std::env;
+    use std::path::{Path, PathBuf};
     pub use crate::{
         types::*,
         socket::*,
@@ -23,15 +24,24 @@ mod common {
         Object
     };
 
-    pub fn get_socket_path() -> String {
-        if let Ok(path ) = env::var("WAYLAND_DISPLAY") {
-            path
+    pub fn get_socket_path(exists: bool) -> std::io::Result<PathBuf> {
+        let mut path = PathBuf::from(env::var("XDG_RUNTIME_DIR").unwrap_or_default());
+        if let Ok(display) = env::var("WAYLAND_DISPLAY") {
+            path.push(display);
+            Ok(path)
         } else {
-            if let Ok(path) = env::var("XDG_RUNTIME_DIR") {
-                path + "/wayland-0"
-            } else {
-                "wayland-0".into()
+            for name in 0..=32 {
+                let mut try_path = path.clone();
+                try_path.push(format!("wayland-{}", name));
+                if try_path.exists() == exists {
+                    return Ok(try_path)
+                }
+                // Attempt to unlink the file so that a new one can be created in its place
+                if exists == false && crate::socket::UnixStream::connect(&try_path).is_err() && std::fs::remove_file(&try_path).is_ok() {
+                    return Ok(try_path)
+                }
             }
+            Err(std::io::Error::new(std::io::ErrorKind::NotFound, "Unable to find a suitable socket path"))
         }
     }
 }
