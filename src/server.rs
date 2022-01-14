@@ -32,21 +32,23 @@ impl Server {
         UnixListener::bind(get_socket_path(false)?)
             .map(|listener| Self(listener))
     }
-    pub fn start<T: 'static + Dispatch + Default, E: 'static + DispatchErrorHandler + Default>(self) {
+    pub fn start<Display: 'static + Dispatch + Send + Clone, Error: 'static + DispatchErrorHandler + Send + Clone>(self, display: Display, error_handler: Error) {
         for stream in self.0 {
+            let display = display.clone();
+            let error_handler = error_handler.clone();
             std::thread::spawn(|| {
                 let mut client = Client {
                     stream,
                     messages: Default::default(),
                     fds: Default::default(),
                     objects: Default::default(),
-                    error_handler: Some(Box::new(E::default())),
+                    error_handler: Some(Box::new(error_handler)),
                     timer_events: Some(Default::default()),
                     generic_events: Some(Default::default()),
                     serial: 0
                 };
                 client.add(Null).unwrap();
-                client.add(T::default()).unwrap();
+                client.add(display).unwrap();
                 loop {
                     if let Err(e) = client.dispatch() {
                         if let Err(e) = e.try_handle(&mut client) {

@@ -3,10 +3,10 @@ use wl::server::prelude::*;
 
 fn main() {
     let server = wl::Server::bind().unwrap();
-    server.start::<CInit, ErrorHandler>()
+    server.start(CInit::default(), ErrorHandler::default())
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct ErrorHandler;
 impl DispatchErrorHandler for ErrorHandler {
     fn handle(&mut self, client: &mut Client, error: wl::DispatchError) -> Result<()> {
@@ -24,7 +24,7 @@ mod custom {
     type CInit = super::CInit;
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct CInit;
 impl custom::CInit for Lease<CInit> {
     fn read(&mut self, _: &mut Client, mut file: File) -> Result<()> {

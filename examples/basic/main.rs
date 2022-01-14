@@ -2,10 +2,10 @@ use wl::server::prelude::*;
 
 fn main() {
     let server = wl::Server::bind().unwrap();
-    server.start::<WlDisplay, DisplayErrorHandler>()
+    server.start(WlDisplay::default(), DisplayErrorHandler::default())
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 struct DisplayErrorHandler;
 impl DispatchErrorHandler for DisplayErrorHandler {
     fn handle(&mut self, client: &mut Client, error: wl::DispatchError) -> Result<()> {
@@ -73,7 +73,7 @@ fn display(client: &mut Client) -> Result<Lease<WlDisplay>> {
     client.get(Client::DISPLAY)
 }
 
-#[derive(Default)]
+#[derive(Default, Clone)]
 pub struct WlDisplay {
     serial: u32
 }
