@@ -66,7 +66,7 @@ impl Message {
         let args_size = self.args.len() * std::mem::size_of::<u32>();
         let message_size = 8 + args_size;
         let info = (message_size << 16) as u32 | self.opcode as u32;
-
+        // TODO: Buffer messages to send
         stream.sendmsg(&mut [
             IoVec::from(self.object.to_ne_bytes().as_mut_slice()),
             IoVec::from(info.to_ne_bytes().as_mut_slice()),

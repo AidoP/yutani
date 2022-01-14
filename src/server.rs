@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs::{self, File},
     io,
-    ops::{Deref, DerefMut}, any::Any, fmt::{self, Display}
+    ops::{Deref, DerefMut}, any::Any, fmt::{self, Display}, path::Iter, time::{Duration, Instant}
 };
 
 use crate::common::*;
@@ -52,6 +52,8 @@ impl Server {
                     fds: Default::default(),
                     objects: Default::default(),
                     error_handler: Some(Box::new(E::default())),
+                    timer_events: Some(Default::default()),
+                    generic_events: Some(Default::default()),
                     serial: 0
                 };
                 client.add(Null).unwrap();
@@ -80,11 +82,13 @@ pub struct Client {
     fds: VecDeque<File>,
     objects: HashMap<u32, Resident<dyn Any>>,
     error_handler: Option<Box<dyn DispatchErrorHandler>>,
+    timer_events: Option<TimerList>,
+    generic_events: Option<EventList>,
     /// A counter for generating unique ID's
     serial: u32
 }
 impl Client {
-    /// Collect any new messages and execute them
+    /// Collect any new messages and execute them, then signal all ready events
     pub fn dispatch(&mut self) -> Result<()> {
         if self.stream.recvmsg(&mut self.messages, &mut self.fds)? {
             while Message::available(&self.messages) {
@@ -92,6 +96,19 @@ impl Client {
                 self.get_any(message.object)?.dispatch(self, message)?;
             }
         }
+        // Signal all timer events. Remove the list from the client to prevent a mutable reference cycle
+        let mut timer_events = self.timer_events.take();
+        if let Some(timer_events) = &mut timer_events {
+            timer_events.signal_ready(self)?
+        }
+        self.timer_events = timer_events;
+        // Signal all other events. Remove the list from the client to prevent a mutable reference cycle
+        self.generic_events = self.generic_events.take();
+        let mut generic_events = self.generic_events.take();
+        if let Some(generic_events) = &mut generic_events {
+            generic_events.signal_ready(self)?
+        }
+        self.generic_events = generic_events;
         Ok(())
     }
     /// Send a message down the wire 
@@ -184,6 +201,206 @@ impl Client {
             Ok(())
         } else {
             Err(SystemError::NoDispatchHandler(error).into())
+        }
+    }
+    /// Register a timer event with the client
+    /// # Panics
+    /// If called from another timer event
+    pub fn register_timer(&mut self, event: TimerEvent) {
+        self.timer_events.as_mut().expect("Cannot register a timer within a timer signal handler").add(event)
+    }
+    /// Register an event with the client. Prefer a TimerEvent where possible.
+    /// # Panics
+    /// If called from another event
+    pub fn register_event(&mut self, event: Box<dyn Event>) {
+        self.generic_events.as_mut().expect("Cannot register an event within another event signal handler").add(event)
+    }
+}
+
+/// A generic event source
+pub trait Event {
+    /// Indicate if the event is ready to be signalled
+    fn poll(&mut self) -> bool;
+    /// Called when the event is ready
+    /// 
+    /// Return true if the event should stay registered
+    fn signal(&mut self, client: &mut Client) -> Result<bool>;
+}
+/// A singly-linked list of events stored in no particular order
+pub enum EventList {
+    Tail,
+    Event {
+        event: Box<dyn Event>,
+        next: Box<Self>
+    }
+}
+impl EventList {
+    pub fn new() -> Self {
+        Self::Tail
+    }
+    /// Add an event to the front of the list
+    pub fn add(&mut self, event: Box<dyn Event>) {
+        // Take the old list, replacing self with an empty list
+        let mut old = Self::Tail;
+        std::mem::swap(self, &mut old);
+        // Move the old list with the prepended element back in
+        *self = Self::Event {
+            event,
+            next: Box::new(old)
+        };
+    }
+    pub fn signal_ready(&mut self, client: &mut Client) -> Result<()> {
+        let mut node = self;
+        while let Self::Event { event, next } = node {
+            if event.poll() {
+                if !event.signal(client)? {
+                    // Take the original list minus the head
+                    let mut head = Self::new();
+                    std::mem::swap(&mut head, next);
+                    // Swap the lists such that the one containing just the head is in `head`
+                    std::mem::swap(&mut head, node);
+                    // The head element is now owned and pruned off
+                } else {
+                    // Safety: The lifetime is valid, the current version of borrow check fails to handle this correctly
+                    // Yes, I hate doing this, but the alternatives are less than ideal
+                    // Compilation with rustc flag `-Z polonius` allows this to succeed:
+                    // node = next
+                    node = unsafe { &mut *(next.deref_mut() as *mut _)}
+                }
+            } else {
+                node = unsafe { &mut *(next.deref_mut() as *mut _)}
+            }
+        }
+        Ok(())
+    }
+}
+impl Default for EventList {
+    fn default() -> Self {
+        Self::Tail
+    }
+}
+/// An event that will be signaled after a time
+pub struct TimerEvent {
+    creation: Instant,
+    duration: Duration,
+    pub signal: Box<dyn FnOnce(&mut Client) -> Result<()>>
+}
+impl TimerEvent {
+    /// Create a new timer to be signalled after the duration has passed
+    pub fn new<F: 'static + FnOnce(&mut Client) -> Result<()>>(duration: Duration, signal: F) -> Self {
+        Self {
+            creation: Instant::now(),
+            duration,
+            signal: Box::new(signal)
+        }
+    }
+}
+/// A singly-linked list of timer events ordered chronologically with events to fire sooner being placed at the head of the list
+/// 
+/// ```rust
+/// # use std::{time::*, rc::Rc, cell::RefCell};
+/// # use wl::server::{TimerEvent, TimerList};
+/// let mut list = TimerList::new();
+/// let mut output = Rc::new(RefCell::new(Vec::<u8>::new()));
+/// 
+/// let mut o = output.clone();
+/// list.insert(TimerEvent::new(Duration::from_millis(200), move |client| Ok({o.borrow_mut().push(0);})));
+/// let mut o = output.clone();
+/// list.insert(TimerEvent::new(Duration::from_millis(250), move |client| Ok({o.borrow_mut().push(1);})));
+/// let mut o = output.clone();
+/// list.insert(TimerEvent::new(Duration::from_millis(50),  move |client| Ok({o.borrow_mut().push(2);})));
+/// let mut o = output.clone();
+/// list.insert(TimerEvent::new(Duration::from_millis(250), move |client| Ok({o.borrow_mut().push(3);})));
+/// 
+/// # #[allow(deref_nullptr)] let client = unsafe { &mut *std::ptr::null_mut() }; // Technically UB, need better stub
+/// std::thread::sleep(Duration::from_millis(300));
+/// list.signal_ready(client).unwrap();
+/// 
+/// assert_eq!(vec![2, 0, 1, 3], *output.borrow());
+/// ```
+pub enum TimerList {
+    Tail,
+    Event {
+        timer: TimerEvent,
+        next: Box<TimerList>
+    }
+}
+impl TimerList {
+    /// Create a new, empty, list
+    pub fn new() -> Self {
+        Self::Tail
+    }
+    /// Creates an iterator over each timer event
+    pub fn iter(&self) -> TimerListIter {
+        TimerListIter { list: self }
+    }
+    /// Insert the event in the list chronologically
+    pub fn add(&mut self, mut event: TimerEvent) {
+        let mut node = self;
+        while let Self::Event { timer, next } = node {
+            let fires_later = (event.creation + event.duration) > (timer.creation + timer.duration);
+            if fires_later {
+                node = next;
+            } else {
+                // Split the list
+                let mut new = Box::new(Self::new());
+                std::mem::swap(&mut new, next);
+                // Insert the earlier event at the end of the other list
+                std::mem::swap(&mut event, timer);
+                // Merge the end of the list back on
+                **next = TimerList::Event {
+                    timer: event,
+                    next: new
+                };
+                return
+            }
+        }
+        // Append to the end
+        let new = Self::Event {
+            timer: event,
+            next: Box::new(Self::Tail)
+        };
+        *node = new;
+    }
+    /// Signals all ready timers, removing them from the list
+    pub fn signal_ready(&mut self, client: &mut Client) -> Result<()> {
+        let now = std::time::Instant::now();
+        while let Self::Event { timer, next } = self {
+            let is_ready = (timer.creation + timer.duration) < now;
+            if is_ready {
+                // Take the original list minus the head
+                let mut head = Self::new();
+                std::mem::swap(&mut head, next);
+                // Swap the lists such that the one containing just the head is in `head`
+                std::mem::swap(&mut head, self);
+                // The head element is now owned and pruned off
+                if let TimerList::Event { timer, ..} = head {
+                    (timer.signal)(client)?
+                }
+            } else {
+                break
+            }
+        }
+        Ok(())
+    }
+}
+impl Default for TimerList {
+    fn default() -> Self {
+        Self::Tail
+    }
+}
+pub struct TimerListIter<'a> {
+    list: &'a TimerList
+}
+impl<'a> Iterator for TimerListIter<'a> {
+    type Item = &'a TimerEvent;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let TimerList::Event { timer, next } = self.list {
+            self.list = next;
+            Some(timer)
+        } else {
+            None
         }
     }
 }

@@ -28,7 +28,7 @@ impl From<f64> for Fixed {
     }
 }
 impl From<Fixed> for f32 {
-    fn from(f: Fixed) -> f32 {
+    fn from(_: Fixed) -> f32 {
         todo!(/* Is f32 guaranteed to be an IEEE 754 single precision */)
     }
 }
