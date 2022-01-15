@@ -13,9 +13,11 @@ pub mod prelude {
         types::*,
         Object,
         server::{
+            Error,
             Result,
             ErrorHandler,
             DispatchErrorHandler,
+            Resident,
             Lease,
             Server,
             Client,
@@ -135,8 +137,24 @@ impl Client {
         } else {
             let object = Resident::new(object);
             let lease = object.lease(id)?;
-            self.objects.insert(id, object.to_any());
+            self.objects.insert(id, object.into_any());
             //Dispatch::init(&mut lease, self)?;
+            Ok(lease)
+        }
+    }
+    /// Create a resident object that has discarded concrete type information
+    #[inline]
+    pub fn reserve<T: 'static + Dispatch>(object: T) -> Resident<dyn Any> {
+        Resident::new(object).into_any()
+    }
+    /// Attempt to insert an object that has been reserved as a resident
+    pub fn insert_any(&mut self, id: impl Object, object: Resident<dyn Any>) -> Result<Lease<dyn Any>> {
+        let id = id.object();
+        if self.objects.contains_key(&id) {
+            Err(DispatchError::ObjectExists(id).into())
+        } else {
+            let lease = object.lease(id)?;
+            self.objects.insert(id, object);
             Ok(lease)
         }
     }
@@ -411,7 +429,7 @@ struct LeaseBox<T: ?Sized> {
 /// can be mutably borrowed by a Lease that it indirectly owns.
 /// 
 /// Inspired by `Option::take` which allows the same system without the automatic return of ownership.
-struct Resident<T: ?Sized> {
+pub struct Resident<T: ?Sized> {
     ptr: *mut LeaseBox<T>
 }
 impl<T: Dispatch> Resident<T> {
@@ -422,7 +440,7 @@ impl<T: Dispatch> Resident<T> {
     }
 }
 impl<T: 'static + Any> Resident<T> {
-    fn to_any(self) -> Resident<dyn Any> {
+    fn into_any(self) -> Resident<dyn Any> {
         let this: Resident<dyn Any> = Resident {
             ptr: self.ptr
         };
@@ -440,6 +458,20 @@ impl<T: ?Sized> Resident<T> {
 
                 Ok(Lease { ptr: self.ptr, id })
             }
+        }
+    }
+}
+impl<T: Clone + ?Sized> Clone for Resident<T> {
+    fn clone(&self) -> Self {
+        let other = unsafe { &*self.ptr };
+        Self {
+            ptr: Box::leak(Box::new(LeaseBox {
+                leased: false,
+                interface: other.interface,
+                version: other.version,
+                dispatch: other.dispatch,
+                value: other.value.clone()
+            }))
         }
     }
 }
