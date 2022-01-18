@@ -160,8 +160,8 @@ impl Client {
         Resident::new(object).into_any()
     }
     /// Attempt to insert an object that has been reserved as a resident
-    pub fn insert_any<Id: AsRef<dyn Object>>(&mut self, id: Id, object: Resident<dyn Any>) -> Result<Lease<dyn Any>> {
-        let id = id.as_ref().object();
+    pub fn insert_any(&mut self, id: NewId, object: Resident<dyn Any>) -> Result<Lease<dyn Any>> {
+        let id = id.object();
         if self.objects.contains_key(&id) {
             Err(DispatchError::ObjectExists(id).into())
         } else {
