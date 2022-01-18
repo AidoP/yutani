@@ -13,7 +13,7 @@ pub mod socket;
 
 mod common {
     use std::env;
-    use std::path::{Path, PathBuf};
+    use std::path::PathBuf;
     pub use crate::{
         types::*,
         socket::*,

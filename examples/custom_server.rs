@@ -1,9 +1,9 @@
-use std::{fs::File, io::Read, os::unix::prelude::FromRawFd};
+use std::{fs::File, io::Read};
 use wl::server::prelude::*;
 
 fn main() {
     let server = wl::Server::bind().unwrap();
-    server.start(CInit::default(), ErrorHandler::default())
+    server.start(CInit::default(), ErrorHandler::default(), |_, _| Ok(()))
 }
 
 #[derive(Default, Clone)]

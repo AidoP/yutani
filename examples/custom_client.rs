@@ -1,4 +1,4 @@
-use std::{fs::File, os::unix::prelude::AsRawFd};
+use std::fs::File;
 
 fn main() {
     let file = File::open("readme.md").unwrap();

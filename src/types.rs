@@ -67,6 +67,14 @@ impl NewId {
             interface
         }
     }
+    /// Creates a new ID without any associated version or interface
+    pub fn unknown(id: u32) -> Self {
+        Self {
+            id,
+            version: 0,
+            interface: "Unknown".into()
+        }
+    }
 }
 impl Display for NewId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {

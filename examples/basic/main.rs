@@ -1,8 +1,8 @@
-use wl::server::prelude::*;
+use wl::{server::prelude::*, DispatchError, SystemError};
 
 fn main() {
     let server = wl::Server::bind().unwrap();
-    server.start(WlDisplay::default(), DisplayErrorHandler::default())
+    server.start(WlDisplay::default(), DisplayErrorHandler::default(), WlDisplay::drop_handler)
 }
 
 #[derive(Default, Clone)]
@@ -82,11 +82,18 @@ impl WlDisplay {
         self.serial = self.serial.wrapping_add(1);
         self.serial
     }
+    fn drop_handler(client: &mut Client, object: Lease<dyn std::any::Any>) -> Result<()> {
+        use wayland::WlDisplay;
+        let mut display = display(client)?;
+        display.delete_id(client, object.object())
+    }
 }
 impl wayland::WlDisplay for Lease<WlDisplay> {
     fn sync(&mut self, client: &mut Client, callback: NewId) -> Result<()> {
         use wayland::WlCallback;
-        client.temporary(callback, WlCallback)?.done(client, self.serial())?;
+        let mut lease = client.insert(callback, WlCallback)?;
+        lease.done(client, self.serial())?;
+        client.delete(&lease)?;
         Ok(())
     }
     fn get_registry(&mut self, client: &mut Client, registry: NewId) -> Result<()> {
@@ -99,8 +106,7 @@ impl wayland::WlDisplay for Lease<WlDisplay> {
     }
 }
 pub struct WlCallback;
-impl wayland::WlCallback for Lease<WlCallback> {
-}
+impl wayland::WlCallback for Lease<WlCallback> {}
 pub struct WlRegistry;
 impl wayland::WlRegistry for Lease<WlRegistry> {
     fn bind(&mut self, client: &mut Client, global: u32, id: NewId) -> Result<()> {
@@ -193,7 +199,7 @@ impl wayland::WlCompositor for Lease<WlCompositor> {
 pub struct WlSurface;
 impl wayland::WlSurface for Lease<WlSurface> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
     fn attach(&mut self, client: &mut Client, buffer: Lease<shm::WlBuffer>, x: i32, y: i32) -> Result<()> {
         todo!()
@@ -226,7 +232,7 @@ impl wayland::WlSurface for Lease<WlSurface> {
 pub struct WlRegion;
 impl wayland::WlRegion for Lease<WlRegion> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
     fn add(&mut self, client: &mut Client, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
         todo!()
@@ -247,7 +253,7 @@ impl Global for WlSubcompositor {
 }
 impl wayland::WlSubcompositor for Lease<WlSubcompositor> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
     fn get_subsurface(&mut self, client: &mut Client, id: NewId, surface: Lease<WlSurface>, parent: Lease<WlSurface>) -> Result<()> {
         client.insert(id, WlSubsurface { surface: surface.object(), parent: parent.object() })?;
@@ -260,7 +266,7 @@ pub struct WlSubsurface {
 }
 impl wayland::WlSubsurface for Lease<WlSubsurface> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
     fn set_position(&mut self, client: &mut Client, x: i32, y: i32) -> Result<()> {
         todo!()
@@ -285,7 +291,7 @@ impl Global for XdgWmBase {
 }
 impl xdg_shell::XdgWmBase for Lease<XdgWmBase> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
     fn create_positioner(&mut self, client: &mut Client, id: NewId) -> Result<()> {
         todo!()
@@ -303,7 +309,7 @@ pub struct XdgSurface {
 }
 impl xdg_shell::XdgSurface for Lease<XdgSurface> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
     fn get_toplevel(&mut self, client: &mut Client, id: NewId) -> Result<()> {
         client.insert(id, XdgToplevel::new(self))?;
@@ -335,7 +341,7 @@ impl XdgToplevel {
 }
 impl xdg_shell::XdgToplevel for Lease<XdgToplevel> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
     fn set_parent(&mut self, client: &mut Client, parent: Lease<XdgToplevel>) -> Result<()> {
         todo!()
@@ -382,7 +388,7 @@ impl xdg_shell::XdgToplevel for Lease<XdgToplevel> {
 pub struct XdgPopup;
 impl xdg_shell::XdgPopup for Lease<XdgPopup> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
     fn grab(&mut self, client: &mut Client, seat: Lease<WlSeat> , serial:u32) -> Result<()>  {
         todo!()
@@ -398,7 +404,7 @@ pub struct XdgPositioner {
 }
 impl xdg_shell::XdgPositioner for Lease<XdgPositioner> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
     fn set_size(&mut self, client: &mut Client, width: i32, height: i32) -> Result<()> {
         todo!()

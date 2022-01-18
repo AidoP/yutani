@@ -61,7 +61,7 @@ impl WlShmPool {
 }
 impl wayland::WlShmPool for Lease<WlShmPool> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
     fn create_buffer(&mut self, client: &mut Client, id: NewId, offset: i32, width: i32, height: i32, stride: i32, format: u32) -> Result<()> {
         // Buffers require shared memory access (unsafe)
@@ -150,6 +150,6 @@ impl WlBuffer {
 }
 impl wayland::WlBuffer for Lease<WlBuffer> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
-        client.drop(self)
+        client.delete(self)
     }
 }

@@ -1,8 +1,8 @@
 use std::{
     collections::{HashMap, VecDeque},
-    fs::{self, File},
+    fs::File,
     io,
-    ops::{Deref, DerefMut}, any::Any, fmt::{self, Display}, path::Iter, time::{Duration, Instant}
+    ops::{Deref, DerefMut}, any::Any, fmt::{self, Display}, time::{Duration, Instant}
 };
 
 use crate::common::*;
@@ -34,10 +34,16 @@ impl Server {
         UnixListener::bind(get_socket_path(false)?)
             .map(|listener| Self(listener))
     }
-    pub fn start<Display: 'static + Dispatch + Send + Clone, Error: 'static + DispatchErrorHandler + Send + Clone>(self, display: Display, error_handler: Error) {
+    pub fn start<Display, Error, DropHandler>(self, display: Display, error_handler: Error, drop_handler: DropHandler)
+    where
+        Display: 'static + Send + Clone + Dispatch,
+        Error: 'static + Send + Clone + DispatchErrorHandler,
+        DropHandler: 'static + Send + Clone + Fn(&mut Client, Lease<dyn Any>) -> Result<()>
+    {
         for stream in self.0 {
             let display = display.clone();
             let error_handler = error_handler.clone();
+            let drop_handler = drop_handler.clone();
             std::thread::spawn(|| {
                 let mut client = Client {
                     stream,
@@ -47,7 +53,9 @@ impl Server {
                     error_handler: Some(Box::new(error_handler)),
                     timer_events: Some(Default::default()),
                     generic_events: Some(Default::default()),
-                    serial: 0
+                    serial: 0,
+                    drop_handler: Some(Box::new(drop_handler)),
+                    drop_queue: Default::default()
                 };
                 client.add(Null).unwrap();
                 client.add(display).unwrap();
@@ -77,7 +85,10 @@ pub struct Client {
     timer_events: Option<TimerList>,
     generic_events: Option<EventList>,
     /// A counter for generating unique ID's
-    serial: u32
+    serial: u32,
+    /// Objects that are queued for deletion
+    drop_queue: Vec<u32>,
+    drop_handler: Option<Box<dyn Fn(&mut Client, Lease<dyn Any>) -> Result<()>>>
 }
 impl Client {
     /// Collect any new messages and execute them, then signal all ready events
@@ -101,7 +112,8 @@ impl Client {
             generic_events.signal_ready(self)?
         }
         self.generic_events = generic_events;
-        Ok(())
+        // Drop objects queued for deletion
+        self.drop()
     }
     /// Send a message down the wire 
     pub fn send(&mut self, message: Message) -> Result<()> {
@@ -130,7 +142,7 @@ impl Client {
         }
     }
     /// Attempt to insert an object for the given ID
-    pub fn insert<T: 'static + Dispatch>(&mut self, id: impl Object, object: T) -> Result<Lease<T>> {
+    pub fn insert<T: 'static + Dispatch>(&mut self, id: NewId, object: T) -> Result<Lease<T>> {
         let id = id.object();
         if self.objects.contains_key(&id) {
             Err(DispatchError::ObjectExists(id).into())
@@ -148,8 +160,8 @@ impl Client {
         Resident::new(object).into_any()
     }
     /// Attempt to insert an object that has been reserved as a resident
-    pub fn insert_any(&mut self, id: impl Object, object: Resident<dyn Any>) -> Result<Lease<dyn Any>> {
-        let id = id.object();
+    pub fn insert_any<Id: AsRef<dyn Object>>(&mut self, id: Id, object: Resident<dyn Any>) -> Result<Lease<dyn Any>> {
+        let id = id.as_ref().object();
         if self.objects.contains_key(&id) {
             Err(DispatchError::ObjectExists(id).into())
         } else {
@@ -162,7 +174,7 @@ impl Client {
     #[inline]
     pub fn add<T: 'static + Dispatch>(&mut self, object: T) -> Result<Lease<T>> {
         let id = self.new_id();
-        self.insert(id, object)
+        self.insert(NewId::unknown(id), object)
     }
     /// Attempts to generate an available object ID
     /// Only guarantees that it is unique for the resident objects at the time of calling,
@@ -174,32 +186,31 @@ impl Client {
         }
         self.serial
     }
-    /// Remove an object from the client by lease
-    pub fn drop<T: ?Sized>(&mut self, lease: &mut Lease<T>) -> Result<()> {
-        if let Some(_) = self.objects.remove(&lease.id) {
+    /// Queue an object for deletion. The object may not be deleted immediately.
+    pub fn delete(&mut self, object: &dyn Object) -> Result<()> {
+        if self.objects.contains_key(&object.object()) {
+            self.drop_queue.push(object.object());
             Ok(())
         } else {
-            Err(DispatchError::ObjectNotFound(lease.id).into())
+            Err(DispatchError::ObjectNotFound(object.object()).into())
         }
     }
-    /// Remove an object from the client, returning a lease
-    pub fn remove<T: 'static + Dispatch>(&mut self, id: u32) -> Result<Lease<T>> {
-        if let Some(r) = self.objects.remove(&id) {
-            r.lease(id)
-                .and_then(|l| l.downcast())
-        } else {
-            Err(DispatchError::ObjectNotFound(id).into())
+    /// Drop all objects in the drop queue
+    fn drop(&mut self) -> Result<()> {
+        let drop_handler = self.drop_handler.take().unwrap();
+        while let Some(id) = self.drop_queue.pop() {
+            if let Some(object) = self.objects.remove(&id) {
+                match object.lease(id).and_then(|object| drop_handler(self, object)) {
+                    Ok(()) => (),
+                    Err(e) => {
+                        self.drop_handler = Some(drop_handler);
+                        return Err(e)
+                    }
+                }
+            }
         }
-    }
-    /// Create an object that is never stored
-    pub fn temporary<T: Dispatch>(&mut self, NewId { id, ..}: NewId, object: T) -> Result<Lease<T>> {
-        if self.objects.contains_key(&id) {
-            Err(DispatchError::ObjectExists(id).into())
-        } else {
-            let lease = Lease::temporary(id, object);
-            //Dispatch::init(&mut lease, self)?;
-            Ok(lease)
-        }
+        self.drop_handler = Some(drop_handler);
+        Ok(())
     }
     /// Attempt to handle a dispatch error using the registered error handler
     fn handle(&mut self, error: DispatchError) -> Result<()> {
@@ -440,7 +451,7 @@ impl<T: Dispatch> Resident<T> {
     }
 }
 impl<T: 'static + Any> Resident<T> {
-    fn into_any(self) -> Resident<dyn Any> {
+    pub fn into_any(self) -> Resident<dyn Any> {
         let this: Resident<dyn Any> = Resident {
             ptr: self.ptr
         };
@@ -492,19 +503,20 @@ pub struct Lease<T: ?Sized> {
     ptr: *mut LeaseBox<T>,
     id: u32
 }
-impl<T: Dispatch> Lease<T> {
-    /// Creates a lease that will never have a corresponding resident
-    fn temporary(id: u32, value: T) -> Self {
-        Self {
-            ptr: Box::leak(Box::new(LeaseBox { leased: false, interface: T::INTERFACE, version: T::VERSION, dispatch: T::dispatch, value })),
-            id
-        }
+impl<T: 'static + Any> Lease<T> {
+    pub fn into_any(self) -> Lease<dyn Any> {
+        let this: Lease<dyn Any> = Lease {
+            ptr: self.ptr,
+            id: self.id
+        };
+        std::mem::forget(self);
+        this
     }
 }
 impl Lease<dyn Any> {
     /// Downcast the dynamic object to a concrete type
     pub fn downcast<T: Dispatch + Any>(self) -> Result<Lease<T>> {
-        if self.is::<T>() {
+        if unsafe { (*self.ptr).value.is::<T>() } {
             let ptr = self.ptr.cast();
             let id = self.id;
             std::mem::forget(self);
@@ -530,13 +542,13 @@ impl Lease<dyn Any> {
         unsafe { (*self.ptr).version }
     }
 }
-impl<T: ?Sized> Deref for Lease<T> {
+impl<T> Deref for Lease<T> {
     type Target = T;
     fn deref(&self) -> &Self::Target {
         unsafe { &(*self.ptr).value }
     }
 }
-impl<T: ?Sized> DerefMut for Lease<T> {
+impl<T> DerefMut for Lease<T> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         unsafe { &mut (*self.ptr).value }
     }
@@ -572,7 +584,6 @@ impl<T: ?Sized> Object for Lease<T> {
         self.id
     }
 }
-
 pub struct Null;
 impl Dispatch for Null {
     const INTERFACE: &'static str = "null";
