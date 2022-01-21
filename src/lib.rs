@@ -1,4 +1,5 @@
 use std::{fmt, io};
+use once_cell::sync::Lazy;
 
 pub mod server;
 pub use server::Server;
@@ -45,10 +46,8 @@ mod common {
         }
     }
 }
-lazy_static::lazy_static! {
-    /// Indicates that messages should debug-print
-    pub static ref DEBUG: bool = cfg!(debug_assertions) || std::env::var("WAYLAND_DEBUG").is_ok();
-}
+/// Indicates that messages should debug-print
+pub static DEBUG: Lazy<bool> = Lazy::new(| | cfg!(debug_assertions) || std::env::var("WAYLAND_DEBUG").is_ok());
 
 /// An item that represents an object
 pub trait Object: fmt::Display {

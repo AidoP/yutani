@@ -6,5 +6,5 @@ edition = "2018"
 
 [dependencies]
 libc = "0.2"
-lazy_static = "1.4"
+once_cell = "1.9"
 wl-macro = { git = "https://github.com/AidoP/wl-macro" }
