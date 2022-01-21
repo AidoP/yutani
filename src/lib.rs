@@ -65,9 +65,11 @@ pub enum SystemError {
     ObjectLeased(u32),
     /// The message buffer is corrupted
     CorruptMessage,
-    /// A dispatch error was encountered but no dispatch error handler was available
+    /// A dispatch error was encountered but no dispatch error handler was available, or the dispatch handler itself encountered a dispatch error
     NoDispatchHandler(DispatchError),
     IoError(io::Error),
+    /// Any error that is unrecoverable
+    Other(Box<dyn std::error::Error>)
 }
 impl fmt::Display for SystemError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -75,7 +77,8 @@ impl fmt::Display for SystemError {
             Self::ObjectLeased(object) => write!(f, "Attempted to lease object \"{}\" more than once", object),
             Self::CorruptMessage => write!(f, "Raw message data is corrupt or invalid"),
             Self::NoDispatchHandler(error) => write!(f, "Dispatch error unhandled as an error handler was not registered: {}", error),
-            Self::IoError(error) => write!(f, "{}", error)
+            Self::IoError(error) => error.fmt(f),
+            Self::Other(error) => error.fmt(f)
         }
     }
 }
