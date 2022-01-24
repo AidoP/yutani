@@ -151,7 +151,7 @@ impl wayland::WlPointer for Lease<WlPointer> {
     fn release(&mut self, client: &mut Client) -> Result<()> {
         todo!()
     }
-    fn set_cursor(&mut self, client: &mut Client, serial:u32, surface: Lease<WlSurface>, hotspot_x: i32, hotspot_y: i32) -> Result<()>  {
+    fn set_cursor(&mut self, client: &mut Client, serial:u32, surface: Nullable<Lease<WlSurface>>, hotspot_x: i32, hotspot_y: i32) -> Result<()>  {
         todo!()
     }
     fn axis_source(&mut self, client: &mut Client, axis_source:u32) -> Result<()> {
@@ -172,7 +172,7 @@ impl wayland::WlPointer for Lease<WlTouch> {
     fn release(&mut self, client: &mut Client) -> Result<()> {
         todo!()
     }
-    fn set_cursor(&mut self, client: &mut Client, serial:u32, surface: Lease<WlSurface>, hotspot_x: i32, hotspot_y: i32) -> Result<()>  {
+    fn set_cursor(&mut self, client: &mut Client, serial:u32, surface: Nullable<Lease<WlSurface>>, hotspot_x: i32, hotspot_y: i32) -> Result<()>  {
         todo!()
     }
     fn axis_source(&mut self, client: &mut Client, axis_source:u32) -> Result<()> {
@@ -201,7 +201,7 @@ impl wayland::WlSurface for Lease<WlSurface> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
         client.delete(self)
     }
-    fn attach(&mut self, client: &mut Client, buffer: Lease<shm::WlBuffer>, x: i32, y: i32) -> Result<()> {
+    fn attach(&mut self, client: &mut Client, buffer: Nullable<Lease<shm::WlBuffer>>, x: i32, y: i32) -> Result<()> {
         todo!()
     }
     fn damage(&mut self, client: &mut Client, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
@@ -210,10 +210,10 @@ impl wayland::WlSurface for Lease<WlSurface> {
     fn frame(&mut self, client: &mut Client, callback: NewId) -> Result<()> {
         todo!()
     }
-    fn set_opaque_region(&mut self, client: &mut Client, region: Lease<WlRegion>) -> Result<()> {
+    fn set_opaque_region(&mut self, client: &mut Client, region: Nullable<Lease<WlRegion>>) -> Result<()> {
         todo!()
     }
-    fn set_input_region(&mut self, client: &mut Client, region: Lease<WlRegion>) -> Result<()> {
+    fn set_input_region(&mut self, client: &mut Client, region: Nullable<Lease<WlRegion>>) -> Result<()> {
         todo!()
     }
     fn set_buffer_transform(&mut self, client: &mut Client, transform: i32) -> Result<()> {
@@ -223,6 +223,9 @@ impl wayland::WlSurface for Lease<WlSurface> {
         todo!()
     }
     fn damage_buffer(&mut self, client: &mut Client, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
+        todo!()
+    }
+    fn offset(&mut self, client: &mut Client, x: i32, y: i32) -> Result<()> {
         todo!()
     }
     fn commit(&mut self, client: &mut Client) -> Result<()> {
@@ -315,7 +318,7 @@ impl xdg_shell::XdgSurface for Lease<XdgSurface> {
         client.insert(id, XdgToplevel::new(self))?;
         Ok(())
     }
-    fn get_popup(&mut self, client: &mut Client, id: NewId, parent: Lease<XdgSurface>, positioner: Lease<XdgPositioner>) -> Result<()> {
+    fn get_popup(&mut self, client: &mut Client, id: NewId, parent: Nullable<Lease<XdgSurface>>, positioner: Lease<XdgPositioner>) -> Result<()> {
         todo!()
     }
     fn set_window_geometry(&mut self, client: &mut Client, x: i32, y: i32, width: i32, height: i32) -> Result<()> {
@@ -343,7 +346,7 @@ impl xdg_shell::XdgToplevel for Lease<XdgToplevel> {
     fn destroy(&mut self, client: &mut Client) -> Result<()> {
         client.delete(self)
     }
-    fn set_parent(&mut self, client: &mut Client, parent: Lease<XdgToplevel>) -> Result<()> {
+    fn set_parent(&mut self, client: &mut Client, parent: Nullable<Lease<XdgToplevel>>) -> Result<()> {
         todo!()
     }
     fn set_title(&mut self, client: &mut Client, title: String) -> Result<()> {
@@ -375,7 +378,7 @@ impl xdg_shell::XdgToplevel for Lease<XdgToplevel> {
     fn unset_maximized(&mut self, client: &mut Client) -> Result<()> {
         todo!()
     }
-    fn set_fullscreen(&mut self, client: &mut Client, output: Lease<WlOutput>) -> Result<()> {
+    fn set_fullscreen(&mut self, client: &mut Client, output: Nullable<Lease<WlOutput>>) -> Result<()> {
         todo!()
     }
     fn unset_fullscreen(&mut self, client: &mut Client) -> Result<()> {

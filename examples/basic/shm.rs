@@ -87,7 +87,7 @@ macro_rules! wl_formats {
                 match format {
                     wayland::WlShmFormat::ARGB8888 => Ok(Self::ARGB8888),
                     wayland::WlShmFormat::XRGB8888 => Ok(Self::XRGB8888),
-                    $(WlShmEnumFormat::$format => Ok(Self::$format),)*
+                    $(wayland::WlShmFormat::$format => Ok(Self::$format),)*
                     _ => todo!(/* User error system */)
                 }
             }

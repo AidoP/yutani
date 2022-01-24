@@ -1,4 +1,4 @@
-use std::{fmt, io};
+use std::{fmt, io, num::NonZeroU32};
 use once_cell::sync::Lazy;
 
 pub mod server;
@@ -22,7 +22,8 @@ mod common {
         DispatchError,
         message::Message,
         RingBuffer,
-        Object
+        Object,
+        Nullable
     };
 
     pub fn get_socket_path(exists: bool) -> std::io::Result<PathBuf> {
@@ -56,6 +57,47 @@ pub trait Object: fmt::Display {
 impl Object for u32 {
     fn object(&self) -> u32 {
         *self
+    }
+}
+/// Like Option<T>, but it implements Display and Object and only accepts references to objects
+pub enum Nullable<T: Object> {
+    Null,
+    Object(T)
+}
+impl<T: Object> Nullable<T> {
+    pub fn as_ref(&self) -> Option<&T> {
+        match self {
+            Self::Null => None,
+            Self::Object(o) => Some(o)
+        }
+    }
+    pub fn as_mut(&mut self) -> Option<&mut T> {
+        match self {
+            Self::Null => None,
+            Self::Object(o) => Some(o)
+        }
+    }
+    pub fn option_object(&self) -> Option<NonZeroU32> {
+        match self {
+            Self::Null => None,
+            Self::Object(o) => NonZeroU32::new(o.object())
+        }
+    }
+}
+impl<'a, T: Object> Object for Nullable<T> {
+    fn object(&self) -> u32 {
+        match self {
+            Self::Null => 0,
+            Self::Object(o) => o.object()
+        }
+    }
+}
+impl<T: Object> fmt::Display for Nullable<T> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Null => write!(f, "null object"),
+            Self::Object(o) => write!(f, "nullable {}", o)
+        }
     }
 }
 

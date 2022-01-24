@@ -12,6 +12,7 @@ pub mod prelude {
     pub use crate::{
         types::*,
         Object,
+        Nullable,
         server::{
             Error,
             Result,
