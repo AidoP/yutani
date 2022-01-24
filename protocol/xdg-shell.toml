@@ -673,6 +673,7 @@ interface = 'xdg_popup'
 [[interface.request.arg]]
 name = 'parent'
 type = 'object'
+allow-null = true
 interface = 'xdg_surface'
 
 [[interface.request.arg]]
@@ -972,6 +973,7 @@ parent surface.'''
 [[interface.request.arg]]
 name = 'parent'
 type = 'object'
+allow-null = true
 interface = 'xdg_toplevel'
 
 [[interface.request]]
@@ -1318,6 +1320,7 @@ visible below the fullscreened surface.'''
 [[interface.request.arg]]
 name = 'output'
 type = 'object'
+allow-null = true
 interface = 'wl_output'
 
 [[interface.request]]
