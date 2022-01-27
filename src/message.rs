@@ -176,7 +176,7 @@ impl<'a> Args<'a> {
         if len & 0b11 != 0 {
             len = (len & !0b11) + 4;
         }
-        if len >= self.args.len() * std::mem::size_of::<u32>() {
+        if len > self.args.len() * std::mem::size_of::<u32>() {
             Err(DispatchError::ExpectedArgument {
                 data_type: "string"
             })

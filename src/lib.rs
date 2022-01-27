@@ -10,14 +10,15 @@ pub use types::{Fixed, NewId, Array};
 mod message;
 pub use message::Message;
 
-pub mod socket;
+pub mod os;
+pub use os::{Event, Events, EventListener, Timer};
 
 mod common {
     use std::env;
     use std::path::PathBuf;
     pub use crate::{
         types::*,
-        socket::*,
+        os::*,
         SystemError,
         DispatchError,
         message::Message,
@@ -39,7 +40,7 @@ mod common {
                     return Ok(try_path)
                 }
                 // Attempt to unlink the file so that a new one can be created in its place
-                if exists == false && crate::socket::UnixStream::connect(&try_path).is_err() && std::fs::remove_file(&try_path).is_ok() {
+                if exists == false && crate::os::UnixStream::connect(&try_path).is_err() && std::fs::remove_file(&try_path).is_ok() {
                     return Ok(try_path)
                 }
             }
@@ -392,8 +393,8 @@ impl RingBuffer {
         let count = count.min(Self::SIZE - self.len() - 1);
         self.writer = (self.writer + count) & Self::MASK
     }
-    pub(crate) fn iov_mut(&mut self) -> [socket::IoVec; 2] {
-        use socket::IoVec;
+    pub(crate) fn iov_mut(&mut self) -> [os::IoVec; 2] {
+        use os::IoVec;
         let (a, b) = self.buffer.split_at_mut(self.writer);
         if self.reader > self.writer {
             [

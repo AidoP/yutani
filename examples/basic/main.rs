@@ -1,8 +1,9 @@
-use wl::{server::prelude::*, DispatchError, SystemError};
+use wl::server::prelude::*;
 
 fn main() {
-    let server = wl::Server::bind().unwrap();
-    server.start(WlDisplay::default(), DisplayErrorHandler::default(), WlDisplay::drop_handler)
+    let mut event_listener = EventListener::new().unwrap();
+    let server = Server::listen(WlDisplay::default(), DisplayErrorHandler::default(), WlDisplay::drop_handler).unwrap();
+    event_listener.register(server).unwrap();
 }
 
 #[derive(Default, Clone)]

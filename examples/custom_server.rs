@@ -2,8 +2,11 @@ use std::{fs::File, io::Read};
 use wl::server::prelude::*;
 
 fn main() {
-    let server = wl::Server::bind().unwrap();
-    server.start(CInit::default(), ErrorHandler::default(), |_, _| Ok(()))
+    let mut event_listener = EventListener::new().unwrap();
+    let server = wl::Server::listen(CInit::default(), ErrorHandler::default(), |_, _| Ok(())).unwrap();
+    event_listener.register(server).unwrap();
+
+    event_listener.start()
 }
 
 #[derive(Default, Clone)]
