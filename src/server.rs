@@ -2,7 +2,7 @@ use std::{
     collections::{HashMap, VecDeque},
     fs::File,
     io,
-    ops::{Deref, DerefMut}, any::Any, fmt::{self, Display}, time::{Duration, Instant}
+    ops::{Deref, DerefMut}, any::Any, fmt::{self, Display}
 };
 
 use crate::common::*;
@@ -42,7 +42,7 @@ impl Server {
     {
         let listener = UnixListener::bind(get_socket_path(false)?)?;
         Ok(listener.on_accept(move |stream| {
-            let mut client = Client::new(stream, display.clone(), error_handler.clone(), drop_handler.clone());
+            let client = Client::new(stream, display.clone(), error_handler.clone(), drop_handler.clone());
             Box::new(client)
         }))
     }
@@ -292,7 +292,7 @@ impl<T: ?Sized> Drop for Resident<T> {
             if (*self.ptr).leased {
                 (*self.ptr).leased = false;
             } else {
-                Box::from_raw(self.ptr);
+                drop(Box::from_raw(self.ptr));
             }
         }
     }
@@ -366,7 +366,7 @@ impl<T: ?Sized> Drop for Lease<T> {
             if (*self.ptr).leased {
                 (*self.ptr).leased = false;
             } else {
-                Box::from_raw(self.ptr);
+                drop(Box::from_raw(self.ptr));
             }
         }
     }

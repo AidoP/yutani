@@ -1,4 +1,4 @@
-use std::{io, path::Path, os::unix::prelude::{OsStrExt, FromRawFd}, ops::Deref, collections::{VecDeque, HashMap}, fs::File, rc::Rc, cell::RefCell};
+use std::{io, path::Path, os::unix::prelude::{OsStrExt, FromRawFd}, ops::Deref, collections::{VecDeque, HashMap}, fs::File};
 use libc::*;
 use crate::RingBuffer;
 

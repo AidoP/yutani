@@ -1,6 +1,9 @@
 use std::{fmt, io, num::NonZeroU32};
 use once_cell::sync::Lazy;
 
+pub mod client;
+pub use client::Client;
+
 pub mod server;
 pub use server::Server;
 
