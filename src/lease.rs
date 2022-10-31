@@ -1,18 +1,8 @@
 use std::{ptr::NonNull, ops::{Deref, DerefMut}, any::Any};
 
-use crate::prelude::*;
+use crate::{prelude::*, wire::Message};
 
-pub trait Object<T> {
-    
-}
-
-#[derive(Debug)]
-pub struct DispatchError {
-    object: Id,
-    error: u32
-}
-
-pub type DispatchFn<S, C> = fn(Lease<dyn Any>, &mut EventLoop<S>, &mut C) -> std::result::Result<(), DispatchError>;
+pub type DispatchFn<S, C> = fn(Lease<dyn Any>, &mut EventLoop<S>, &mut C, Message) -> Result<(), WlError<'static>>;
 
 struct RawLease<T: ?Sized> {
     leased: bool,
@@ -31,7 +21,7 @@ struct RawLease<T: ?Sized> {
 /// The relationship between `Resident` and `Lease` is similar to that of
 /// `Rc` and `Weak`, where `Resident` 
 pub struct Resident<T: ?Sized, S, C> {
-    dispatch: DispatchFn<S ,C>,
+    dispatch: DispatchFn<S, C>,
     lease: NonNull<RawLease<T>>
 }
 impl<T, S, C> Resident<T, S, C> {
@@ -84,23 +74,19 @@ impl<T: ?Sized, S, C> Resident<T, S, C> {
     pub fn version(&self) -> u32 {
         unsafe { self.lease.as_ref() }.version
     }
-    pub fn lease(&mut self) -> Result<Lease<T>> {
+    pub fn lease(&mut self) -> Option<Lease<T>> {
         if unsafe { self.lease.as_ref() }.leased {
-            Err(Error::DoubleLease)
+            None
         } else {
             unsafe { self.lease.as_mut() }.leased = true;
-            Ok(Lease(unsafe { NonNull::new_unchecked(self.lease.as_mut()) }))
+            Some(Lease(unsafe { NonNull::new_unchecked(self.lease.as_mut()) }))
         }
     }
 }
 impl<S, C> Resident<dyn Any, S, C> {
-    /// # Panics
-    /// Panics if there is already a lease.
     #[inline]
-    pub fn dispatch(mut self, event_loop: &mut EventLoop<S>, client: &mut C) -> std::result::Result<(), DispatchError> {
-        let dispatch = self.dispatch;
-        let lease = self.lease().expect("Double lease");
-        dispatch(lease, event_loop, client)
+    pub fn dispatch(&self) -> DispatchFn<S, C> {
+        self.dispatch
     }
 }
 impl<T: ?Sized, S, C> Drop for Resident<T, S, C> {

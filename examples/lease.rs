@@ -5,12 +5,12 @@ use syslib::*;
 
 // Testing dynamic dispatch and type erasure with Lease system
 
-fn dispatch_a<T>(object: Lease<dyn Any>, event_loop: &mut EventLoop<T>, client: &mut Client<T>) -> std::result::Result<(), DispatchError> {
+fn dispatch_a<T>(object: Lease<dyn Any>, event_loop: &mut EventLoop<T>, client: &mut Client<T>) -> std::result::Result<(), WlError> {
     let object: Lease<i32> = object.downcast().unwrap();
     println!("a: {:?}", *object);
     Ok(())
 }
-fn dispatch_b<T>(object: Lease<dyn Any>, event_loop: &mut EventLoop<T>, client: &mut Client<T>) -> std::result::Result<(), DispatchError> {
+fn dispatch_b<T>(object: Lease<dyn Any>, event_loop: &mut EventLoop<T>, client: &mut Client<T>) -> std::result::Result<(), WlError> {
     let object: Lease<&'static str> = object.downcast().unwrap();
     println!("b: {:?}", *object);
     Ok(())
@@ -24,9 +24,10 @@ fn main() {
     let objs = vec![a.into_any(), b.into_any()];
     let stream = Stream::connect("/var/run/user/1000/wayland-0").unwrap();
     let mut client = Client::new(stream);
-    for obj in objs {
+    for mut obj in objs {
         let mut event_loop = EventLoop::new(()).unwrap();
-        obj.dispatch(&mut event_loop, &mut client).unwrap();
+        let dispatch = obj.dispatch();
+        dispatch(obj.lease().unwrap(), &mut event_loop, &mut client).unwrap();
     }
     // Prints:
     // a: 10

@@ -1,13 +1,53 @@
-use std::{fmt::Debug, path::Path, ops::{Deref, DerefMut}};
+use std::{fmt::Debug, path::Path, ops::{Deref, DerefMut}, borrow::Cow};
 
-use crate::prelude::*;
+use crate::{prelude::*};
 use ahash::{HashMap, HashMapExt};
 use syslib::{Socket, File, FileDescriptor};
 
-pub struct Interface {
-    version: u32,
-    interface: String
+#[derive(Debug)]
+pub struct WlError<'a> {
+    pub object: Id,
+    pub error: u32,
+    pub description: Cow<'a, str>
 }
+impl<'a> WlError<'a> {
+    pub const CORRUPT: Self = Self {
+        object: Id(1),
+        error: 1,
+        description: Cow::Borrowed("Protocol violation or malformed request.")
+    };
+    pub const NO_OBJECT: Self = Self {
+        object: Id(1),
+        error: 0,
+        description: Cow::Borrowed("No object with that ID.")
+    };
+    pub const NO_GLOBAL: Self = Self {
+        object: Id(1),
+        error: 1,
+        description: Cow::Borrowed("Invalid request for a global.")
+    };
+    pub const UTF_8: Self = Self {
+        object: Id(1),
+        error: 1,
+        description: Cow::Borrowed("Strings must be valid UTF-8.")
+    };
+    pub const NO_FD: Self = Self {
+        object: Id(1),
+        error: 1,
+        description: Cow::Borrowed("Expected a file descriptor but none were received.")
+    };
+    pub const OOM: Self = Self {
+        object: Id(1),
+        error: 2,
+        description: Cow::Borrowed("The compositor is out of memory.")
+    };
+    pub const INTERNAL: Self = Self {
+        object: Id(1),
+        error: 3,
+        description: Cow::Borrowed("Compositor state is corrupted.")
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Id(u32);
@@ -22,27 +62,45 @@ impl Into<u32> for Id {
     }
 }
 pub struct NewId {
-    interface: Option<Interface>,
-    id: Id
+    id: Id,
+    version: u32,
+    interface: String
 }
 impl NewId {
     #[inline]
-    pub fn interface(&self) -> &Option<Interface> {
-        &self.interface
-    }
-    #[inline]
     pub fn id(&self) -> Id {
         self.id
+    }
+    #[inline]
+    pub fn version(&self) -> u32 {
+        self.version
+    }
+    #[inline]
+    pub fn interface(&self) -> &str {
+        &self.interface
     }
 }
 /// Fixed decimal number as specified by the Wayland wire format
 #[repr(transparent)]
 pub struct Fixed(u32);
+impl Fixed {
+    #[inline]
+    fn from_raw(raw: u32) -> Self {
+        Self(raw)
+    }
+}
+
+#[derive(Debug)]
+pub struct Message {
+    pub object: Id,
+    pub opcode: u16,
+    pub size: u16
+}
 
 pub trait EventSource<T> {
     fn fd(&self) -> Fd<'static>;
-    fn destroy(&mut self, event_loop: &mut EventLoop<T>) {}
-    fn input(&mut self, event_loop: &mut EventLoop<T>) -> Result<()>;
+    fn destroy(&mut self, _event_loop: &mut EventLoop<T>) {}
+    fn input(&mut self, event_loop: &mut EventLoop<T>) -> crate::Result<()>;
 }
 pub struct EventLoop<T> {
     epoll: File,
@@ -50,14 +108,14 @@ pub struct EventLoop<T> {
     pub state: T
 }
 impl<T> EventLoop<T> {
-    pub fn new(state: T) -> Result<Self> {
+    pub fn new(state: T) -> crate::Result<Self> {
         Ok(Self {
             epoll: syslib::epoll_create(syslib::epoll::Flags::CLOSE_ON_EXEC)?,
             sources: HashMap::new(),
             state
         })
     }
-    pub fn add(&mut self, event_source: Box<dyn EventSource<T>>) -> Result<()> {
+    pub fn add(&mut self, event_source: Box<dyn EventSource<T>>) -> crate::Result<()> {
         use syslib::epoll;
         let fd = event_source.fd();
         let event = epoll::Event {
@@ -68,7 +126,7 @@ impl<T> EventLoop<T> {
         self.sources.insert(fd.raw(), Some(event_source));
         Ok(())
     }
-    pub fn wait(&mut self, timeout: u32) -> Result<()> {
+    pub fn wait(&mut self, timeout: u32) -> crate::Result<()> {
         use syslib::epoll;
         let mut events: [MaybeUninit<epoll::Event>; 32] = std::array::from_fn(|_| std::mem::MaybeUninit::uninit());
         let events = syslib::epoll_wait(&self.epoll, &mut events, timeout)?;
@@ -78,7 +136,11 @@ impl<T> EventLoop<T> {
             if event.events.any(epoll::Events::INPUT) {
                 // Lease the event source so that it can modify its owning data structure
                 let mut source = self.sources.get_mut(&fd.raw()).unwrap().take();
-                had_error = source.as_mut().unwrap().input(self).is_err();
+                if let Err(err) = source.as_mut().unwrap().input(self) {
+                    #[cfg(debug_assertions)]
+                    eprintln!("Dropping event {:?}: {:?}", fd, err);
+                    had_error = true;
+                }
                 let leased_source = self.sources.get_mut(&fd.raw())
                     .expect("An event source erroneously removed it's own entry.");
                 // Return the lease of the event source
@@ -109,7 +171,7 @@ pub struct Server {
     pub(crate) socket: Socket
 }
 impl Server {
-    pub fn listen<P: AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn listen<P: AsRef<Path>>(path: P) -> crate::Result<Self> {
         use std::os::unix::prelude::OsStrExt;
         use syslib::sock::*;
         let socket = syslib::socket(Domain::UNIX, Type::STREAM | TypeFlags::CLOSE_ON_EXEC, Protocol::UNSPECIFIED)?;
@@ -125,7 +187,7 @@ impl Server {
 
 pub struct Stream {
     pub(crate) socket: Socket,
-    pub rx_msg: RingBuffer<u32>,
+    rx_msg: RingBuffer<u32>,
     tx_msg: RingBuffer<u32>,
     rx_fd: RingBuffer<File>,
     tx_fd: RingBuffer<File>,
@@ -134,7 +196,7 @@ impl Stream {
     /// Open a new stream connected to a Unix domain socket.
     /// 
     /// `path` Must be less than 108 bytes long.
-    pub fn connect<P: AsRef<Path>>(path: P) -> Result<Self> {
+    pub fn connect<P: AsRef<Path>>(path: P) -> crate::Result<Self> {
         use std::os::unix::prelude::OsStrExt;
         use syslib::sock::*;
         let socket = syslib::socket(Domain::UNIX, Type::STREAM | TypeFlags::CLOSE_ON_EXEC, Protocol::UNSPECIFIED)?;
@@ -143,7 +205,7 @@ impl Stream {
 
         Self::new(socket)
     }
-    pub(crate) fn new(socket: Socket) -> Result<Self> {
+    pub(crate) fn new(socket: Socket) -> crate::Result<Self> {
         let flags: syslib::open::Flags = syslib::fcntl(&socket, syslib::Fcntl::GetFd)?.try_into()?;
         syslib::fcntl(&socket, syslib::Fcntl::SetFd(flags | syslib::open::Flags::CLOSE_ON_EXEC))?;
         Ok(Self {
@@ -154,39 +216,81 @@ impl Stream {
             tx_fd: RingBuffer::new(8)
         })
     }
-    pub fn message(&mut self) -> Result<(Id, u16)> {
-        todo!()
+    pub fn message(&mut self) -> Option<Result<Message, WlError<'static>>> {
+        let req = self.rx_msg.get(1)?;
+        let size = ((req & 0xFFFF_0000) >> 16) as u16;
+        if size < 8 {
+            return Some(Err(WlError::CORRUPT))
+        }
+        if self.rx_msg.len() < (size as usize) / std::mem::size_of::<u32>() {
+            return None;
+        }
+        let opcode = (req & 0xFFFF) as u16;
+        let object = Id(self.rx_msg.pop().unwrap());
+        let _ = self.rx_msg.pop();
+        Some(Ok(Message { object, opcode, size }))
     }
-    pub fn i32(&mut self) -> Result<i32> {
-        todo!()
+    pub fn i32(&mut self) -> Result<i32, WlError<'static>> {
+        self.rx_msg.pop().map(|i| i as i32).ok_or(WlError::CORRUPT)
     }
-    pub fn u32(&mut self) -> Result<i32> {
-        todo!()
+    pub fn u32(&mut self) -> Result<u32, WlError<'static>> {
+        self.rx_msg.pop().ok_or(WlError::CORRUPT)
     }
-    pub fn fixed(&mut self) -> Result<Fixed> {
-        todo!()
+    pub fn fixed(&mut self) -> Result<Fixed, WlError<'static>> {
+        self.rx_msg.pop().map(|i| Fixed::from_raw(i)).ok_or(WlError::CORRUPT)
     }
-    pub fn string(&mut self) -> Result<String> {
-        todo!()
+    #[inline]
+    pub fn string(&mut self) -> Result<String, WlError<'static>> {
+        self.bytes().and_then(|bytes| String::from_utf8(bytes).map_err(|_| WlError::UTF_8))
     }
-    pub fn object(&mut self) -> Result<Id> {
-        todo!()
+    pub fn object(&mut self) -> Result<Id, WlError<'static>> {
+        self.rx_msg.pop().map(|i| Id(i)).ok_or(WlError::CORRUPT)
     }
-    pub fn new_id(&mut self) -> Result<NewId> {
-        todo!()
+    pub fn new_id(&mut self) -> Result<NewId, WlError<'static>> {
+        let interface = self.string()?.into();
+        let version = self.u32()?;
+        let id = self.object()?;
+        Ok(NewId { id, version, interface })
     }
-    pub fn bytes(&mut self) -> Result<Vec<u8>> {
-        todo!()
+    pub fn bytes(&mut self) -> Result<Vec<u8>, WlError<'static>> {
+        let len = self.u32()?;
+        if len == 0 { return Ok(Vec::new()) }
+        // divide by 4 rounding up
+        let take_len = (len as usize >> 2) + (len & 0b11 != 0) as usize;
+        if self.rx_msg.len() < take_len {
+            return Err(WlError::CORRUPT)
+        }
+        let mut bytes: Vec<u8> = Vec::with_capacity(len as usize);
+        use std::mem::size_of;
+        if self.rx_msg.front > self.rx_msg.back {
+            // Safety: The values in the range between `back` and `front` are initialised and any bit pattern is valid for u8
+            unsafe {
+                let src = self.rx_msg.data.as_ptr() as *const u8;
+                bytes.as_mut_ptr().copy_from_nonoverlapping(src.add(self.rx_msg.back * size_of::<u32>()), len as usize);
+                bytes.set_len(len as usize);
+            }
+        } else {
+            // Safety: The values in the range between `back` and `front` are initialised and any bit pattern is valid for u8
+            unsafe {
+                let src = self.rx_msg.data.as_ptr() as *const u8;
+                let part_len = self.rx_msg.data.len() * size_of::<u32>() - self.rx_msg.back * size_of::<u32>();
+                bytes.as_mut_ptr().copy_from_nonoverlapping(src.add(self.rx_msg.back * size_of::<u32>()), part_len);
+                bytes.as_mut_ptr().add(part_len).copy_from_nonoverlapping(src, self.rx_msg.front * size_of::<u32>());
+                bytes.set_len(len as usize);
+            }
+        }
+        self.rx_msg.back = (self.rx_msg.back + take_len) & (self.rx_msg.data.len() - 1);
+        Ok(bytes)
     }
-    pub fn fd(&mut self) -> Result<Fd> {
-        todo!()
+    pub fn file(&mut self) -> Result<File, WlError<'static>> {
+        self.rx_fd.pop().ok_or(WlError::CORRUPT)
     }
 
     /// Read from a file descriptor in to the buffer.
     /// 
     /// Returns true if any bytes were read. If the bytes read is not a multiple of `size_of::<u32>()`,
     /// the extra bytes are discarded.
-    pub fn recvmsg(&mut self) -> Result<bool> {
+    pub fn recvmsg(&mut self) -> crate::Result<bool> {
         use syslib::*;
         let t = (self.rx_msg.front + self.rx_msg.data.len() - 1) & (self.rx_msg.data.len() - 1);
         if self.rx_msg.front == t {
