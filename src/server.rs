@@ -79,6 +79,9 @@ impl<T> Client<T> {
             new_id: 0xFF00_0000
         }
     }
+    pub fn stream(&mut self) -> &mut Stream {
+        &mut self.stream
+    }
     /// Get a new ID suitable for the next object.
     /// Failure to create an object with the id may be considered a protocol error under `libwayland`.
     pub fn new_id(&mut self) -> u32 {
@@ -109,13 +112,21 @@ impl<T> Client<T> {
             Ok(())
         }
     }
-    pub fn remove(&mut self, id: Id) -> Option<Resident<T>> {
-        self.objects.remove(&id)
+    pub fn remove(&mut self, id: Id) -> Result<Resident<T>, WlError<'static>> {
+        let resident = self.objects.remove(&id).ok_or(WlError::NO_OBJECT)?;
+        let key = self.stream.send_message(Id::DISPLAY, 1)?;
+        self.stream.send_object(id)?;
+        self.stream.commit(key)?;
+        Ok(resident)
     }
-    /// Send a protocol error to the client
-    pub fn error(&mut self, error: WlError) -> ! {
-        eprintln!("Error: {error:?}");
-        todo!()
+    /// Send a protocol error to the client.
+    pub fn error(&mut self, error: &WlError) -> Result<(), WlError> {
+        let key = self.stream.send_message(Id::DISPLAY, 0)?;
+        self.stream.send_object(error.object)?;
+        self.stream.send_u32(error.error)?;
+        self.stream.send_string(&error.description)?;
+        self.stream.commit(key)?;
+        Ok(())
     }
     pub fn get_mut(&mut self, id: Id) -> Option<&mut Resident<T>> {
         self.objects.get_mut(&id)
@@ -130,16 +141,14 @@ impl<T> EventSource<T> for Client<T> {
     }
 
     fn input(&mut self, event_loop: &mut EventLoop<T>) -> crate::Result<()> {
-        if self.stream.recvmsg()? {
+        let result = if self.stream.recvmsg()? {
             let dispatch_result = (|| {
                 while let Some(message) = self.stream.message() {
                     let message = message?;
                     if let Some(resident) = self.get_mut(message.object) {
                         let dispatch = resident.dispatch();
                         let lease = resident.lease().ok_or(WlError::INTERNAL)?;
-                        if let Err(error) = dispatch(lease, event_loop, self, message) {
-                            self.error(error);
-                        }
+                        dispatch(lease, event_loop, self, message)?
                     } else {
                         return Err(WlError::NO_OBJECT)
                     }
@@ -147,9 +156,15 @@ impl<T> EventSource<T> for Client<T> {
                 Ok(())
             })();
             if let Err(error) = dispatch_result {
-                self.error(error);
+                let _ = self.error(&error);
+                Err(Error::Protocol(error))
+            } else {
+                Ok(())
             }
-        }
-        Ok(())
+        } else {
+            Ok(())
+        };
+        self.stream.sendmsg()?;
+        result
     }
 }

@@ -1,3 +1,5 @@
+use prelude::WlError;
+
 pub mod lease;
 pub mod server;
 pub mod wire;
@@ -17,6 +19,7 @@ pub enum Error {
     UnsupportedVersion(&'static str, u32),
     NoObject(u32),
     DuplicateObject(u32),
+    Protocol(WlError<'static>),
     Utf8(std::string::FromUtf8Error),
     Sys(syslib::Error)
 }

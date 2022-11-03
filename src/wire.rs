@@ -51,6 +51,10 @@ impl<'a> WlError<'a> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
 pub struct Id(u32);
+impl Id {
+    /// The display object that must always exist for Wayland to operate.
+    pub const DISPLAY: Self = Self(1);
+}
 impl From<u32> for Id {
     fn from(id: u32) -> Self {
         Self(id)
@@ -96,6 +100,10 @@ pub struct Message {
     pub opcode: u16,
     pub size: u16
 }
+/// Used to complete a message, preventing new arguments from being pushed.
+#[must_use]
+#[derive(Debug)]
+pub struct CommitKey(usize);
 
 pub trait EventSource<T> {
     fn fd(&self) -> Fd<'static>;
@@ -190,7 +198,7 @@ pub struct Stream {
     rx_msg: RingBuffer<u32>,
     tx_msg: RingBuffer<u32>,
     rx_fd: RingBuffer<File>,
-    tx_fd: RingBuffer<File>,
+    tx_fd: RingBuffer<Fd<'static>>,
 }
 impl Stream {
     /// Open a new stream connected to a Unix domain socket.
@@ -230,21 +238,75 @@ impl Stream {
         let _ = self.rx_msg.pop();
         Some(Ok(Message { object, opcode, size }))
     }
+    pub fn send_message(&mut self, id: Id, opcode: u16) -> Result<CommitKey, WlError<'static>> {
+        self.tx_msg.push(id.0);
+        let key = CommitKey(self.tx_msg.front);
+        if let Some(_) = self.tx_msg.push(opcode as u32) {
+            Err(WlError::INTERNAL)
+        } else {
+            Ok(key)
+        }
+    }
+    /// Commits a message, ammending the message header to include the pushed arguments.
+    pub fn commit(&mut self, key: CommitKey) -> Result<(), WlError<'static>> {
+        let len = if self.tx_msg.front > key.0 {
+            self.tx_msg.front - key.0 + 1
+        } else {
+            (self.tx_msg.data.len() - key.0) + self.tx_msg.front + 1
+        } * std::mem::size_of::<u32>();
+        let req = self.tx_msg.get_linear_mut(key.0).ok_or(WlError::INTERNAL)?;
+        *req = (*req & 0x0000_FFFF) | ((len as u32) << 16);
+        Ok(())
+    }
     pub fn i32(&mut self) -> Result<i32, WlError<'static>> {
         self.rx_msg.pop().map(|i| i as i32).ok_or(WlError::CORRUPT)
+    }
+    pub fn send_i32(&mut self, i32: i32) -> Result<(), WlError<'static>> {
+        if let Some(_) = self.tx_msg.push(i32 as u32) {
+            Err(WlError::INTERNAL)
+        } else {
+            Ok(())
+        }
     }
     pub fn u32(&mut self) -> Result<u32, WlError<'static>> {
         self.rx_msg.pop().ok_or(WlError::CORRUPT)
     }
+    pub fn send_u32(&mut self, u32: u32) -> Result<(), WlError<'static>> {
+        if let Some(_) = self.tx_msg.push(u32) {
+            Err(WlError::INTERNAL)
+        } else {
+            Ok(())
+        }
+    }
     pub fn fixed(&mut self) -> Result<Fixed, WlError<'static>> {
         self.rx_msg.pop().map(|i| Fixed::from_raw(i)).ok_or(WlError::CORRUPT)
+    }
+    pub fn send_fixed(&mut self, fixed: Fixed) -> Result<(), WlError<'static>> {
+        if let Some(_) = self.tx_msg.push(fixed.0) {
+            Err(WlError::INTERNAL)
+        } else {
+            Ok(())
+        }
     }
     #[inline]
     pub fn string(&mut self) -> Result<String, WlError<'static>> {
         self.bytes().and_then(|bytes| String::from_utf8(bytes).map_err(|_| WlError::UTF_8))
     }
+    #[inline]
+    pub fn send_string(&mut self, string: &str) -> Result<(), WlError<'static>> {
+        // Need to append null byte
+        self.send_u32(0)?;
+        Ok(())
+    }
     pub fn object(&mut self) -> Result<Id, WlError<'static>> {
         self.rx_msg.pop().map(|i| Id(i)).ok_or(WlError::CORRUPT)
+    }
+    pub fn send_object(&mut self, object: Id) -> Result<(), WlError<'static>> {
+        if let Some(_) = self.tx_msg.push(object.0) {
+            Err(WlError::INTERNAL)
+        } else {
+            Ok(())
+        }
     }
     pub fn new_id(&mut self) -> Result<NewId, WlError<'static>> {
         let interface = self.string()?.into();
@@ -282,8 +344,23 @@ impl Stream {
         self.rx_msg.back = (self.rx_msg.back + take_len) & (self.rx_msg.data.len() - 1);
         Ok(bytes)
     }
+    pub fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), WlError<'static>> {
+        self.send_u32(0)?;
+        let t = (self.rx_msg.front + self.rx_msg.data.len() - 1) & (self.rx_msg.data.len() - 1);
+        if self.rx_msg.front == t {
+            return Err(WlError::INTERNAL)
+        }
+        Ok(())
+    }
     pub fn file(&mut self) -> Result<File, WlError<'static>> {
         self.rx_fd.pop().ok_or(WlError::CORRUPT)
+    }
+    pub fn send_file(&mut self, fd: Fd<'static>) -> Result<(), WlError<'static>> {
+        if let Some(_) = self.tx_fd.push(fd) {
+            Err(WlError::INTERNAL)
+        } else {
+            Ok(())
+        }
     }
 
     /// Read from a file descriptor in to the buffer.
@@ -309,7 +386,7 @@ impl Stream {
                 ]
             }
         };
-        let mut ancillary = sock::Ancillary::<Fd, 4>::new();
+        let mut ancillary = sock::Ancillary::<Fd, 8>::new();
         let read = syslib::recvmsg(&self.socket, &iov, Some(&mut ancillary), syslib::sock::Flags::NONE)? / std::mem::size_of::<u32>();
         self.rx_msg.front = (self.rx_msg.front + read) & (self.rx_msg.data.len() - 1);
         if ancillary.ty() == sock::AncillaryType::RIGHTS && ancillary.level() == sock::Level::SOCKET {
@@ -321,8 +398,49 @@ impl Stream {
         Ok(read != 0)
     }
 
-    fn sendmsg() {
-        todo!()
+    pub fn sendmsg(&mut self) -> crate::Result<()> {
+        use syslib::*;
+        use std::mem::size_of;
+        let (iov, count) = unsafe {
+            if self.tx_msg.front > self.tx_msg.back {
+                let buf = &self.tx_msg.data[self.tx_msg.back..self.tx_msg.front];
+                self.tx_msg.back = (self.tx_msg.back + buf.len()) & (self.tx_msg.data.len() - 1);
+                (
+                    [
+                        IoVec::new(std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len() * size_of::<u32>())),
+                        IoVec::new(&[])
+                    ],
+                    1
+                )
+            } else if self.tx_msg.front == self.tx_msg.back {
+                return Ok(());
+            } else {
+                let buf_back = &self.tx_msg.data[self.tx_msg.back..];
+                let buf_front = &self.tx_msg.data[..self.tx_msg.front];
+                (
+                    [
+                        IoVec::new(std::slice::from_raw_parts(buf_back.as_ptr() as *const u8, buf_back.len() * size_of::<u32>())),
+                        IoVec::new(std::slice::from_raw_parts(buf_front.as_ptr() as *const u8, buf_front.len() * size_of::<u32>()))
+                    ],
+                    2
+                )
+            }
+        };
+        let mut ancillary = sock::Ancillary::<Fd, 8>::new();
+        sendmsg(&self.socket, &iov[..count], Some(&ancillary), sock::Flags::NONE)?;
+        let mut count = 8;
+        loop {
+            if let Some(item) = self.tx_fd.pop() {
+                ancillary.add_item(item);
+            } else {
+                break
+            }
+            if count == 0 {
+                break
+            }
+            count -= 1
+        }
+        Ok(())
     }
 }
 
@@ -425,6 +543,34 @@ impl<T> RingBuffer<T> {
             None
         }
     }
+    /// Get a reference by index relative to the underlying linear buffer.
+    /// 
+    /// Can be faster when you know the back pointer has not changed.
+    pub fn get_linear(&self, index: usize) -> Option<&T> {
+        if (self.front > self.back && index >= self.back && index < self.front) || (self.front < self.back && (index >= self.back || index < self.front)) {
+            self.data.get(index).map(|t| unsafe { t.assume_init_ref()})
+        } else {
+            None
+        }
+    }
+    /// Get a mutable reference by index relative to the underlying linear buffer.
+    /// 
+    /// Can be faster when you know the back pointer has not changed.
+    pub fn get_linear_mut(&mut self, index: usize) -> Option<&mut T> {
+        if (self.front > self.back && index >= self.back && index < self.front) || (self.front < self.back && (index >= self.back || index < self.front)) {
+            self.data.get_mut(index).map(|t| unsafe { t.assume_init_mut()})
+        } else {
+            None
+        }
+    }
+    /// Get the index of the front pointer
+    pub fn front(&self) -> usize {
+        self.front
+    }
+    /// Get the index of the back pointer
+    pub fn back(&self) -> usize {
+        self.back
+    }
     /// Return the number of items in the `RingBuffer`.
     pub fn len(&self) -> usize {
         if self.front < self.back {
@@ -432,6 +578,16 @@ impl<T> RingBuffer<T> {
         } else {
             self.front - self.back
         }
+    }
+    /// Return the number of items that can be inserted before the buffer is full.
+    pub fn free(&self) -> usize {
+        self.data.len() - (
+            if self.front < self.back {
+                (self.front + self.data.len()) - self.back
+            } else {
+                self.front - self.back
+            }
+        )
     }
     /// Return the maximum number of items the RingBuffer` can hold.
     pub fn capacity(&self) -> usize {
