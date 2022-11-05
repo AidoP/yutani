@@ -1,11 +1,14 @@
 [package]
 name = "yutani"
 version = "0.0.0"
+description = "A pure-Rust Wayland implementation."
 edition = "2021"
 license = "MIT"
+readme = "readme.md"
+repository = "https://github.com/AidoP/yutani"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 ahash = "0.8.0"
-syslib = { path = "../syslib", features = ["std"] }
+syslib = { version = "0.0.0", features = ["std"] }
