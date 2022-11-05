@@ -15,7 +15,7 @@ pub mod prelude {
 }
 
 pub type Resident<T> = crate::lease::Resident<dyn Any, T, Client<T>>;
-pub type GlobalBuilderFn<T> = fn(&mut EventLoop<T>, &mut Client<T>, Id, u32) -> Resident<T>;
+pub type GlobalBuilderFn<T> = fn(&mut EventLoop<T>, &mut Client<T>, Id, u32) -> Result<Resident<T>, WlError<'static>>;
 
 pub struct Global<T> {
     pub interface: &'static str,
@@ -58,7 +58,7 @@ impl<T: 'static> EventSource<T> for Server<T> {
             .map(Client::new)
             .map(|mut client| {
                 let display = (self.constructor)(event_loop, &mut client, Id::new(1), 1);
-                client.insert(display).unwrap();
+                client.insert(display.unwrap()).unwrap();
                 Box::new(client)
             });
         match stream {

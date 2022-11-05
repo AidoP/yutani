@@ -90,6 +90,7 @@ impl Into<u32> for Id {
         self.0.into()
     }
 }
+#[derive(Debug)]
 pub struct NewId {
     id: Id,
     version: u32,
