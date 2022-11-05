@@ -5,6 +5,7 @@ use ahash::{HashMap, HashMapExt};
 use syslib::Fd;
 
 pub mod prelude {
+    //pub use wl_macro::server_protocol as protocol;
     pub use crate::prelude::*;
     pub use super::{
         Server,
@@ -14,7 +15,7 @@ pub mod prelude {
 }
 
 pub type Resident<T> = crate::lease::Resident<dyn Any, T, Client<T>>;
-pub type GlobalBuilderFn<T> = fn(&mut EventLoop<T>, &mut Client<T>, u32) -> Resident<T>;
+pub type GlobalBuilderFn<T> = fn(&mut EventLoop<T>, &mut Client<T>, Id, u32) -> Resident<T>;
 
 pub struct Global<T> {
     pub interface: &'static str,
@@ -28,8 +29,14 @@ pub struct Server<T> {
     _marker: PhantomData<T>
 }
 impl<T: 'static> Server<T> {
+    /// Create an event loop with a `wl::Server` server attached as an event source.
+    /// The server will bind and listen to the Unix Domain socket at the specified path.
+    /// The `EventLoop` will contain the specified global state.
+    /// 
+    /// When a client connects to the socket a new `wl::server::Client` instance will be created and
+    /// attached as an event source on the `EventLoop`.
     #[inline]
-    pub fn event_loop<P: AsRef<Path>>(state: T, path: P, constructor: GlobalBuilderFn<T>) -> crate::Result<wire::EventLoop<T>> {
+    pub fn event_loop<P: AsRef<Path>>(path: P, state: T, constructor: GlobalBuilderFn<T>) -> crate::Result<wire::EventLoop<T>> {
         wire::EventLoop::new(state).and_then(|mut event_loop| {
             let server = wire::Server::listen(path)
                 .map(|server| Self { server, constructor, _marker: PhantomData })?;
@@ -50,7 +57,7 @@ impl<T: 'static> EventSource<T> for Server<T> {
             .and_then(Stream::new)
             .map(Client::new)
             .map(|mut client| {
-                let display = (self.constructor)(event_loop, &mut client, 1);
+                let display = (self.constructor)(event_loop, &mut client, Id::new(1), 1);
                 client.insert(display).unwrap();
                 Box::new(client)
             });
@@ -66,17 +73,17 @@ impl<T: 'static> EventSource<T> for Server<T> {
 
 pub struct Client<T> {
     stream: Stream,
-    registry: Vec<Global<T>>,
     objects: HashMap<Id, Resident<T>>,
-    new_id: u32
+    new_id: u32,
+    event_serial: u32
 }
 impl<T> Client<T> {
     pub fn new(stream: Stream) -> Self {
         Self {
             stream,
-            registry: Vec::new(),
             objects: HashMap::new(),
-            new_id: 0xFF00_0000
+            new_id: 0xFF00_0000,
+            event_serial: 0
         }
     }
     pub fn stream(&mut self) -> &mut Stream {
@@ -89,19 +96,11 @@ impl<T> Client<T> {
         self.new_id = self.new_id.checked_add(1).unwrap_or(0xFF00_0000);
         id
     }
-    /// Register a global object constructor.
-    pub fn register(&mut self, global: Global<T>) {
-        self.registry.push(global)
-    }
-    pub fn globals(&self) -> &[Global<T>] {
-        &self.registry
-    }
-    pub fn create_global(&mut self, event_loop: &mut EventLoop<T>, global: u32, id: NewId) -> Result<Lease<dyn Any>, WlError<'static>> {
-        let global = self.registry.get(global as usize).ok_or(WlError::NO_GLOBAL)?;
-        let mut object = (global.constructor)(event_loop, self, id.version());
-        let lease = object.lease().ok_or(WlError::INTERNAL)?;
-        self.insert(object)?;
-        Ok(lease)
+    /// Get the event serial, then increment it.
+    pub fn next_event(&mut self) -> u32 {
+        let event_serial = self.event_serial;
+        self.event_serial = self.event_serial.wrapping_add(1);
+        event_serial
     }
     /// Insert an object in to the client.
     pub fn insert(&mut self, object: Resident<T>) -> Result<(), WlError<'static>> {
@@ -114,19 +113,18 @@ impl<T> Client<T> {
     }
     pub fn remove(&mut self, id: Id) -> Result<Resident<T>, WlError<'static>> {
         let resident = self.objects.remove(&id).ok_or(WlError::NO_OBJECT)?;
-        let key = self.stream.send_message(Id::DISPLAY, 1)?;
-        self.stream.send_object(id)?;
+        let key = self.stream.start_message(Id::DISPLAY, 1);
+        self.stream.send_object(Some(id))?;
         self.stream.commit(key)?;
         Ok(resident)
     }
     /// Send a protocol error to the client.
     pub fn error(&mut self, error: &WlError) -> Result<(), WlError> {
-        let key = self.stream.send_message(Id::DISPLAY, 0)?;
-        self.stream.send_object(error.object)?;
+        let key = self.stream.start_message(Id::DISPLAY, 0);
+        self.stream.send_object(Some(error.object))?;
         self.stream.send_u32(error.error)?;
-        self.stream.send_string(&error.description)?;
-        self.stream.commit(key)?;
-        Ok(())
+        self.stream.send_string(Some(&error.description))?;
+        self.stream.commit(key)
     }
     pub fn get_mut(&mut self, id: Id) -> Option<&mut Resident<T>> {
         self.objects.get_mut(&id)
@@ -150,6 +148,7 @@ impl<T> EventSource<T> for Client<T> {
                         let lease = resident.lease().ok_or(WlError::INTERNAL)?;
                         dispatch(lease, event_loop, self, message)?
                     } else {
+                        // TODO: if the object was recently deleted just ignore the request as requests may have been in-flight still
                         return Err(WlError::NO_OBJECT)
                     }
                 }

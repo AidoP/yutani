@@ -1,12 +1,25 @@
+use std::path::PathBuf;
+
 use prelude::WlError;
 
 pub mod lease;
 pub mod server;
 pub mod wire;
 
+pub use prelude::*;
 pub mod prelude {
-    pub use crate::{Error, lease::Lease, wire::{WlError, EventLoop, Id, Message, NewId}};
-    pub(crate) use syslib::Fd;
+    pub use crate::{Error, lease::Lease, wire::{WlError, EventLoop, Fixed, Id, Message, NewId}};
+    pub use syslib::{Fd, File};
+}
+
+/// Find a socket that can be opened for listening.
+/// 
+/// ## Search Order
+/// 1. `WAYLAND_DISPLAY` environment variable
+/// 2. `$XDG_RUNTIME_DIR/wayland-x` where `x` is a value from `0` to `9`.
+/// 3. `wayland.socket`
+pub fn find_free_socket() -> PathBuf {
+    "wayland.socket".into()
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

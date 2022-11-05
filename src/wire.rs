@@ -1,4 +1,4 @@
-use std::{fmt::Debug, path::Path, ops::{Deref, DerefMut}, borrow::Cow};
+use std::{fmt::Debug, path::Path, ops::{Deref, DerefMut}, borrow::Cow, mem::size_of, num::NonZeroU32};
 
 use crate::{prelude::*};
 use ahash::{HashMap, HashMapExt};
@@ -12,57 +12,82 @@ pub struct WlError<'a> {
 }
 impl<'a> WlError<'a> {
     pub const CORRUPT: Self = Self {
-        object: Id(1),
+        object: Id::DISPLAY,
         error: 1,
         description: Cow::Borrowed("Protocol violation or malformed request.")
     };
     pub const NO_OBJECT: Self = Self {
-        object: Id(1),
+        object: Id::DISPLAY,
         error: 0,
         description: Cow::Borrowed("No object with that ID.")
     };
-    pub const NO_GLOBAL: Self = Self {
-        object: Id(1),
+    pub const UNSUPPORTED_VERSION: Self = Self {
+        object: Id::DISPLAY,
         error: 1,
-        description: Cow::Borrowed("Invalid request for a global.")
+        description: Cow::Borrowed("The requested version of an interface is unsupported.")
+    };
+    pub const INVALID_OPCODE: Self = Self {
+        object: Id::DISPLAY,
+        error: 1,
+        description: Cow::Borrowed("Request contains an invalid opcode.")
+    };
+    pub const NO_GLOBAL: Self = Self {
+        object: Id::DISPLAY,
+        error: 1,
+        description: Cow::Borrowed("No global with that name.")
     };
     pub const UTF_8: Self = Self {
-        object: Id(1),
+        object: Id::DISPLAY,
         error: 1,
         description: Cow::Borrowed("Strings must be valid UTF-8.")
     };
+    pub const NON_NULLABLE: Self = Self {
+        object: Id::DISPLAY,
+        error: 1,
+        description: Cow::Borrowed("Argument is not nullable.")
+    };
     pub const NO_FD: Self = Self {
-        object: Id(1),
+        object: Id::DISPLAY,
         error: 1,
         description: Cow::Borrowed("Expected a file descriptor but none were received.")
     };
     pub const OOM: Self = Self {
-        object: Id(1),
+        object: Id::DISPLAY,
         error: 2,
         description: Cow::Borrowed("The compositor is out of memory.")
     };
     pub const INTERNAL: Self = Self {
-        object: Id(1),
+        object: Id::DISPLAY,
         error: 3,
-        description: Cow::Borrowed("Compositor state is corrupted.")
+        description: Cow::Borrowed("Internal compositor state is corrupted.")
     };
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[repr(transparent)]
-pub struct Id(u32);
+pub struct Id(NonZeroU32);
 impl Id {
     /// The display object that must always exist for Wayland to operate.
-    pub const DISPLAY: Self = Self(1);
+    pub const DISPLAY: Self = Self(unsafe { NonZeroU32::new_unchecked(1) });
+    /// Create an ID from an integer.
+    /// 
+    /// # Panics
+    /// Panics if the ID is 0. For nullable Id's, use `NonZeroU32::new(0).map(Id::from)`.
+    pub const fn new(value: u32) -> Self {
+        let Some(value) = NonZeroU32::new(value) else {
+            panic!()
+        };
+        Self(value)
+    }
 }
-impl From<u32> for Id {
-    fn from(id: u32) -> Self {
+impl From<NonZeroU32> for Id {
+    fn from(id: NonZeroU32) -> Self {
         Self(id)
     }
 }
 impl Into<u32> for Id {
     fn into(self) -> u32 {
-        self.0
+        self.0.into()
     }
 }
 pub struct NewId {
@@ -196,7 +221,7 @@ impl Server {
 pub struct Stream {
     pub(crate) socket: Socket,
     rx_msg: RingBuffer<u32>,
-    tx_msg: RingBuffer<u32>,
+    tx_msg: Vec<u32>,
     rx_fd: RingBuffer<File>,
     tx_fd: RingBuffer<Fd<'static>>,
 }
@@ -219,7 +244,7 @@ impl Stream {
         Ok(Self {
             socket,
             rx_msg: RingBuffer::new(1024),
-            tx_msg: RingBuffer::new(1024),
+            tx_msg: Vec::with_capacity(1024),
             rx_fd: RingBuffer::new(8),
             tx_fd: RingBuffer::new(8)
         })
@@ -230,89 +255,104 @@ impl Stream {
         if size < 8 {
             return Some(Err(WlError::CORRUPT))
         }
-        if self.rx_msg.len() < (size as usize) / std::mem::size_of::<u32>() {
+        if self.rx_msg.len() < (size as usize) / size_of::<u32>() {
             return None;
         }
         let opcode = (req & 0xFFFF) as u16;
-        let object = Id(self.rx_msg.pop().unwrap());
+        let object = match NonZeroU32::new(self.rx_msg.pop().unwrap()).ok_or(WlError::NON_NULLABLE) {
+            Ok(object) => object,
+            Err(e) => return Some(Err(e))
+        };
+        let object = Id(object);
         let _ = self.rx_msg.pop();
         Some(Ok(Message { object, opcode, size }))
     }
-    pub fn send_message(&mut self, id: Id, opcode: u16) -> Result<CommitKey, WlError<'static>> {
-        self.tx_msg.push(id.0);
-        let key = CommitKey(self.tx_msg.front);
-        if let Some(_) = self.tx_msg.push(opcode as u32) {
-            Err(WlError::INTERNAL)
-        } else {
-            Ok(key)
-        }
+    pub fn start_message(&mut self, id: Id, opcode: u16) -> CommitKey {
+        let key = CommitKey(self.tx_msg.len());
+        self.tx_msg.push(id.into());
+        self.tx_msg.push(opcode as u32);
+        key
     }
     /// Commits a message, ammending the message header to include the pushed arguments.
     pub fn commit(&mut self, key: CommitKey) -> Result<(), WlError<'static>> {
-        let len = if self.tx_msg.front > key.0 {
-            self.tx_msg.front - key.0 + 1
-        } else {
-            (self.tx_msg.data.len() - key.0) + self.tx_msg.front + 1
-        } * std::mem::size_of::<u32>();
-        let req = self.tx_msg.get_linear_mut(key.0).ok_or(WlError::INTERNAL)?;
-        *req = (*req & 0x0000_FFFF) | ((len as u32) << 16);
+        let len = self.tx_msg.len() - key.0;
+        let req = self.tx_msg.get_mut(key.0 + 1).expect("Invalid message commit key.");
+        *req = (*req & 0x0000_FFFF) | ((len as u32) << 18);
         Ok(())
     }
     pub fn i32(&mut self) -> Result<i32, WlError<'static>> {
         self.rx_msg.pop().map(|i| i as i32).ok_or(WlError::CORRUPT)
     }
     pub fn send_i32(&mut self, i32: i32) -> Result<(), WlError<'static>> {
-        if let Some(_) = self.tx_msg.push(i32 as u32) {
-            Err(WlError::INTERNAL)
-        } else {
-            Ok(())
-        }
+        self.tx_msg.push(i32 as u32);
+        Ok(())
     }
     pub fn u32(&mut self) -> Result<u32, WlError<'static>> {
         self.rx_msg.pop().ok_or(WlError::CORRUPT)
     }
     pub fn send_u32(&mut self, u32: u32) -> Result<(), WlError<'static>> {
-        if let Some(_) = self.tx_msg.push(u32) {
-            Err(WlError::INTERNAL)
-        } else {
-            Ok(())
-        }
+        self.tx_msg.push(u32);
+        Ok(())
     }
     pub fn fixed(&mut self) -> Result<Fixed, WlError<'static>> {
         self.rx_msg.pop().map(|i| Fixed::from_raw(i)).ok_or(WlError::CORRUPT)
     }
     pub fn send_fixed(&mut self, fixed: Fixed) -> Result<(), WlError<'static>> {
-        if let Some(_) = self.tx_msg.push(fixed.0) {
-            Err(WlError::INTERNAL)
+        self.tx_msg.push(fixed.0);
+        Ok(())
+    }
+    #[inline]
+    pub fn string(&mut self) -> Result<Option<String>, WlError<'static>> {
+        let mut bytes = match self.bytes() {
+            Ok(bytes) => bytes,
+            Err(e) => return Err(e)
+        };
+        // Expect the string to be null-terminated
+        let Some(0) = bytes.pop() else {
+            return Err(WlError::CORRUPT)
+        };
+        if bytes.len() == 0 {
+            Ok(None)
         } else {
-            Ok(())
+            String::from_utf8(bytes).map_err(|_| WlError::UTF_8).map(Some)
         }
     }
     #[inline]
-    pub fn string(&mut self) -> Result<String, WlError<'static>> {
-        self.bytes().and_then(|bytes| String::from_utf8(bytes).map_err(|_| WlError::UTF_8))
-    }
-    #[inline]
-    pub fn send_string(&mut self, string: &str) -> Result<(), WlError<'static>> {
-        // Need to append null byte
-        self.send_u32(0)?;
+    pub fn send_string(&mut self, string: Option<&str>) -> Result<(), WlError<'static>> {
+        let Some(string) = string else {
+            return self.send_u32(0)
+        };
+        let len: u32 = string.len().try_into().unwrap();
+        let len = (len + 4) & !3;
+        self.send_u32(len)?;
+        self.tx_msg.reserve(len as usize);
+        unsafe {
+            self.tx_msg.as_mut_ptr().add(self.tx_msg.len() + (len as usize / size_of::<u32>()) - 1).write(0);
+            (self.tx_msg.as_mut_ptr().add(self.tx_msg.len()) as *mut u8).copy_from(string.as_ptr(), string.len());
+            self.tx_msg.set_len(self.tx_msg.len() + (len as usize / size_of::<u32>()));
+        }
         Ok(())
     }
-    pub fn object(&mut self) -> Result<Id, WlError<'static>> {
-        self.rx_msg.pop().map(|i| Id(i)).ok_or(WlError::CORRUPT)
+    pub fn object(&mut self) -> Result<Option<Id>, WlError<'static>> {
+        self.rx_msg.pop().map(|i| NonZeroU32::new(i).map(Id)).ok_or(WlError::CORRUPT)
     }
-    pub fn send_object(&mut self, object: Id) -> Result<(), WlError<'static>> {
-        if let Some(_) = self.tx_msg.push(object.0) {
-            Err(WlError::INTERNAL)
+    pub fn send_object(&mut self, object: Option<Id>) -> Result<(), WlError<'static>> {
+        if let Some(object) = object {
+            self.send_u32(object.into())
         } else {
-            Ok(())
+            self.send_u32(0)
         }
     }
     pub fn new_id(&mut self) -> Result<NewId, WlError<'static>> {
-        let interface = self.string()?.into();
+        let interface = self.string()?.ok_or(WlError::NON_NULLABLE)?;
         let version = self.u32()?;
-        let id = self.object()?;
+        let id = self.object()?.ok_or(WlError::NON_NULLABLE)?;
         Ok(NewId { id, version, interface })
+    }
+    pub fn send_new_id(&mut self, new_id: &NewId) -> Result<(), WlError<'static>> {
+        self.send_string(Some(new_id.interface()))?;
+        self.send_u32(new_id.version())?;
+        self.send_u32(new_id.id().into())
     }
     pub fn bytes(&mut self) -> Result<Vec<u8>, WlError<'static>> {
         let len = self.u32()?;
@@ -323,7 +363,6 @@ impl Stream {
             return Err(WlError::CORRUPT)
         }
         let mut bytes: Vec<u8> = Vec::with_capacity(len as usize);
-        use std::mem::size_of;
         if self.rx_msg.front > self.rx_msg.back {
             // Safety: The values in the range between `back` and `front` are initialised and any bit pattern is valid for u8
             unsafe {
@@ -345,10 +384,17 @@ impl Stream {
         Ok(bytes)
     }
     pub fn send_bytes(&mut self, bytes: &[u8]) -> Result<(), WlError<'static>> {
-        self.send_u32(0)?;
-        let t = (self.rx_msg.front + self.rx_msg.data.len() - 1) & (self.rx_msg.data.len() - 1);
-        if self.rx_msg.front == t {
-            return Err(WlError::INTERNAL)
+        if bytes.len() == 0 {
+            return Ok(())
+        }
+        let len: u32 = bytes.len().try_into().unwrap();
+        let len = (len + 3) & !3;
+        self.send_u32(len)?;
+        self.tx_msg.reserve(len as usize);
+        unsafe {
+            self.tx_msg.as_mut_ptr().add(self.tx_msg.len() + (len as usize / size_of::<u32>()) - 1).write(0);
+            (self.tx_msg.as_mut_ptr().add(self.tx_msg.len()) as *mut u8).copy_from(bytes.as_ptr(), bytes.len());
+            self.tx_msg.set_len(self.tx_msg.len() + (len as usize / size_of::<u32>()));
         }
         Ok(())
     }
@@ -376,18 +422,18 @@ impl Stream {
         let iov = unsafe {
             if self.rx_msg.front > t {
                 [
-                    IoVecMut::maybe_uninit(self.rx_msg.data.as_mut_ptr().add(self.rx_msg.front) as *mut u8, (self.rx_msg.data.len() - self.rx_msg.front) * std::mem::size_of::<u32>()),
-                    IoVecMut::maybe_uninit(self.rx_msg.data.as_mut_ptr() as *mut u8, t * std::mem::size_of::<u32>())
+                    IoVecMut::maybe_uninit(self.rx_msg.data.as_mut_ptr().add(self.rx_msg.front) as *mut u8, (self.rx_msg.data.len() - self.rx_msg.front) * size_of::<u32>()),
+                    IoVecMut::maybe_uninit(self.rx_msg.data.as_mut_ptr() as *mut u8, t * size_of::<u32>())
                 ]
             } else {
                 [
-                    IoVecMut::maybe_uninit(self.rx_msg.data.as_mut_ptr().add(self.rx_msg.front) as *mut u8, (t - self.rx_msg.front) * std::mem::size_of::<u32>()),
+                    IoVecMut::maybe_uninit(self.rx_msg.data.as_mut_ptr().add(self.rx_msg.front) as *mut u8, (t - self.rx_msg.front) * size_of::<u32>()),
                     IoVecMut::maybe_uninit(std::ptr::null_mut(), 0)
                 ]
             }
         };
         let mut ancillary = sock::Ancillary::<Fd, 8>::new();
-        let read = syslib::recvmsg(&self.socket, &iov, Some(&mut ancillary), syslib::sock::Flags::NONE)? / std::mem::size_of::<u32>();
+        let read = syslib::recvmsg(&self.socket, &iov, Some(&mut ancillary), syslib::sock::Flags::NONE)? / size_of::<u32>();
         self.rx_msg.front = (self.rx_msg.front + read) & (self.rx_msg.data.len() - 1);
         if ancillary.ty() == sock::AncillaryType::RIGHTS && ancillary.level() == sock::Level::SOCKET {
             for fd in ancillary.items() {
@@ -400,34 +446,10 @@ impl Stream {
 
     pub fn sendmsg(&mut self) -> crate::Result<()> {
         use syslib::*;
-        use std::mem::size_of;
-        let (iov, count) = unsafe {
-            if self.tx_msg.front > self.tx_msg.back {
-                let buf = &self.tx_msg.data[self.tx_msg.back..self.tx_msg.front];
-                self.tx_msg.back = (self.tx_msg.back + buf.len()) & (self.tx_msg.data.len() - 1);
-                (
-                    [
-                        IoVec::new(std::slice::from_raw_parts(buf.as_ptr() as *const u8, buf.len() * size_of::<u32>())),
-                        IoVec::new(&[])
-                    ],
-                    1
-                )
-            } else if self.tx_msg.front == self.tx_msg.back {
-                return Ok(());
-            } else {
-                let buf_back = &self.tx_msg.data[self.tx_msg.back..];
-                let buf_front = &self.tx_msg.data[..self.tx_msg.front];
-                (
-                    [
-                        IoVec::new(std::slice::from_raw_parts(buf_back.as_ptr() as *const u8, buf_back.len() * size_of::<u32>())),
-                        IoVec::new(std::slice::from_raw_parts(buf_front.as_ptr() as *const u8, buf_front.len() * size_of::<u32>()))
-                    ],
-                    2
-                )
-            }
-        };
+        let iov = [
+            IoVec::new(unsafe { std::slice::from_raw_parts(self.tx_msg.as_ptr() as *const u8, self.tx_msg.len() * size_of::<u32>()) })
+        ];
         let mut ancillary = sock::Ancillary::<Fd, 8>::new();
-        sendmsg(&self.socket, &iov[..count], Some(&ancillary), sock::Flags::NONE)?;
         let mut count = 8;
         loop {
             if let Some(item) = self.tx_fd.pop() {
@@ -440,6 +462,8 @@ impl Stream {
             }
             count -= 1
         }
+        sendmsg(&self.socket, &iov, Some(&ancillary), sock::Flags::NONE)?;
+        self.tx_msg.clear();
         Ok(())
     }
 }
