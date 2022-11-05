@@ -5,7 +5,6 @@ use ahash::{HashMap, HashMapExt};
 use syslib::Fd;
 
 pub mod prelude {
-    //pub use wl_macro::server_protocol as protocol;
     pub use crate::prelude::*;
     pub use super::{
         Server,
@@ -29,11 +28,11 @@ pub struct Server<T> {
     _marker: PhantomData<T>
 }
 impl<T: 'static> Server<T> {
-    /// Create an event loop with a `wl::Server` server attached as an event source.
+    /// Create an event loop with a `yutani::Server` server attached as an event source.
     /// The server will bind and listen to the Unix Domain socket at the specified path.
     /// The `EventLoop` will contain the specified global state.
     /// 
-    /// When a client connects to the socket a new `wl::server::Client` instance will be created and
+    /// When a client connects to the socket a new `yutani::server::Client` instance will be created and
     /// attached as an event source on the `EventLoop`.
     #[inline]
     pub fn event_loop<P: AsRef<Path>>(path: P, state: T, constructor: GlobalBuilderFn<T>) -> crate::Result<wire::EventLoop<T>> {

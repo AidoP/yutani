@@ -473,7 +473,7 @@ use std::mem::MaybeUninit;
 /// A circular buffer suitable as a FIFO queue.
 /// 
 /// ```rust
-/// use wl::wire::RingBuffer;
+/// use yutani::wire::RingBuffer;
 /// 
 /// // Allocate a new buffer that can hold 4 elements
 /// const ITEMS: &'static [&'static str] = &["apples", "oranges", "pears", "mangoes", "grapes", "bananas", "cherimoyas", "lemons"];
