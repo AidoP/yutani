@@ -11,4 +11,4 @@ repository = "https://github.com/AidoP/yutani"
 
 [dependencies]
 ahash = "0.8.0"
-syslib = { version = "0.0.0", features = ["std"] }
+syslib = { path = "../syslib", features = ["std"] }

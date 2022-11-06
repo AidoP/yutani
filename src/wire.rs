@@ -1,4 +1,4 @@
-use std::{fmt::Debug, path::Path, ops::{Deref, DerefMut}, borrow::Cow, mem::size_of, num::NonZeroU32};
+use std::{fmt::{Debug, self}, path::Path, ops::{Deref, DerefMut}, borrow::Cow, mem::size_of, num::NonZeroU32};
 
 use crate::{prelude::*};
 use ahash::{HashMap, HashMapExt};
@@ -11,15 +11,15 @@ pub struct WlError<'a> {
     pub description: Cow<'a, str>
 }
 impl<'a> WlError<'a> {
-    pub const CORRUPT: Self = Self {
-        object: Id::DISPLAY,
-        error: 1,
-        description: Cow::Borrowed("Protocol violation or malformed request.")
-    };
     pub const NO_OBJECT: Self = Self {
         object: Id::DISPLAY,
         error: 0,
         description: Cow::Borrowed("No object with that ID.")
+    };
+    pub const CORRUPT: Self = Self {
+        object: Id::DISPLAY,
+        error: 1,
+        description: Cow::Borrowed("Protocol violation or malformed request.")
     };
     pub const UNSUPPORTED_VERSION: Self = Self {
         object: Id::DISPLAY,
@@ -50,6 +50,16 @@ impl<'a> WlError<'a> {
         object: Id::DISPLAY,
         error: 1,
         description: Cow::Borrowed("Expected a file descriptor but none were received.")
+    };
+    pub const DOMAIN: Self = Self {
+        object: Id::DISPLAY,
+        error: 1,
+        description: Cow::Borrowed("An argument was outside the range of allowed values.")
+    };
+    pub const LEAK: Self = Self {
+        object: Id::DISPLAY,
+        error: 1,
+        description: Cow::Borrowed("Attempted to destroy an object before its children.")
     };
     pub const OOM: Self = Self {
         object: Id::DISPLAY,
@@ -90,6 +100,12 @@ impl Into<u32> for Id {
         self.0.into()
     }
 }
+impl fmt::Display for Id {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 #[derive(Debug)]
 pub struct NewId {
     id: Id,
@@ -111,6 +127,8 @@ impl NewId {
     }
 }
 /// Fixed decimal number as specified by the Wayland wire format
+// TODO: proper Debug / Display implementations
+#[derive(Debug)]
 #[repr(transparent)]
 pub struct Fixed(u32);
 impl Fixed {
